@@ -2,6 +2,7 @@ from flask import Flask, request, render_template, redirect, url_for, g, jsonify
 import sqlite3
 import os
 import uuid
+from markupsafe import escape
 
 app = Flask(__name__)
 DATABASE = "feed.db"
@@ -110,7 +111,8 @@ class BST:
 # -------------------------
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DATABASE)
+        # enable check_same_thread False for dev single-process
+        g.db = sqlite3.connect(DATABASE, check_same_thread=False)
         g.db.row_factory = sqlite3.Row
     return g.db
 
@@ -123,8 +125,22 @@ def close_db(exception):
 def init_db():
     if not os.path.exists(DATABASE):
         conn = sqlite3.connect(DATABASE)
-        with open("schema.sql", "r") as f:
-            conn.executescript(f.read())
+        if not os.path.exists("schema.sql"):
+            # Avoid crashing if schema.sql missing; create minimal schema for posts
+            conn.execute("""
+            CREATE TABLE posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT,
+                caption TEXT,
+                author TEXT,
+                post_type TEXT,
+                up INTEGER DEFAULT 0,
+                down INTEGER DEFAULT 0
+            );
+            """)
+        else:
+            with open("schema.sql", "r") as f:
+                conn.executescript(f.read())
         conn.commit()
         conn.close()
 
@@ -133,7 +149,8 @@ def init_db():
 # -------------------------
 def get_feed_stack():
     db = get_db()
-    rows = db.execute("SELECT * FROM posts ORDER BY id ASC").fetchall()
+    # return newest-first so front-end loop.first behaves predictably if you prepend interatives
+    rows = db.execute("SELECT * FROM posts ORDER BY id DESC").fetchall()
     stack = Stack()
     for r in rows:
         # convert sqlite Row to regular dict to avoid sqlite Row quirks in templates/JS
@@ -143,10 +160,9 @@ def get_feed_stack():
             "caption": r["caption"],
             "author": r["author"],
             "post_type": r["post_type"],
-            "up": r["up"],
-            "down": r["down"],
+            "up": r["up"] if r["up"] is not None else 0,
+            "down": r["down"] if r["down"] is not None else 0,
         })
-    # returns newest-first because stack pushes in DB order; reverse if you prefer newest-first
     return stack.to_list()
 
 def perform_bst_search(keyword):
@@ -256,7 +272,7 @@ def create_post():
     db.commit()
     return redirect(url_for("lectures"))
 
-@app.route("/vote/<int:id>/<string:way>")
+@app.route("/vote/<int:id>/<string:way>", methods=["GET"])
 def vote(id, way):
     db = get_db()
     if way == "up":
@@ -266,25 +282,37 @@ def vote(id, way):
     db.commit()
     return redirect(url_for("lectures"))
 
-@app.route("/delete/<int:id>")
+# accept POST from fetch in your UI (was GET previously)
+@app.route("/delete/<int:id>", methods=["POST"])
 def delete(id):
     # demonstrate queue-based delete: enqueue & dequeue then delete
     q = QueueLinked()
     q.enqueue(id)
     post_id = q.dequeue()
     if post_id is None:
-        return redirect(url_for("lectures"))
+        return jsonify(status="no-op"), 200
 
     db = get_db()
     db.execute("DELETE FROM posts WHERE id=?", (post_id,))
     db.commit()
-    return redirect(url_for("lectures"))
+    return jsonify(status="deleted"), 200
 
+# Edit should accept the same form fields used by your modal (title, caption, author)
 @app.route("/edit/<int:id>", methods=["POST"])
 def edit(id):
-    new_caption = request.form.get("new_caption", "") or ""
+    # Your modal sets the form to post title, caption, author (same names)
+    title = request.form.get("title")
+    caption = request.form.get("caption")
+    author = request.form.get("author")
+
     db = get_db()
-    db.execute("UPDATE posts SET caption=? WHERE id=?", (new_caption, id))
+    # Only update fields that were provided
+    if title is not None:
+        db.execute("UPDATE posts SET title=? WHERE id=?", (title, id))
+    if caption is not None:
+        db.execute("UPDATE posts SET caption=? WHERE id=?", (caption, id))
+    if author is not None:
+        db.execute("UPDATE posts SET author=? WHERE id=?", (author, id))
     db.commit()
     return redirect(url_for("lectures"))
 
@@ -304,6 +332,18 @@ bst = {"root": None}
 
 def new_id():
     return str(uuid.uuid4())
+
+# Small helper: render a general tree to nested UL for direct assignment to innerHTML
+def render_tree_html(node):
+    if not node:
+        return ""
+    # escape to avoid injection from client-provided values
+    label = escape(node.get("value", ""))
+    children = node.get("children", [])
+    if not children:
+        return f"<div data-id='{node.get('id')}' class='tree-node'>{label}</div>"
+    inner = "".join(render_tree_html(c) for c in children)
+    return f"<div class='tree-node' data-id='{node.get('id')}'>{label}<div class='tree-children' style='margin-left:16px'>{inner}</div></div>"
 
 # QUEUE API
 @app.post("/queue/enqueue")
@@ -336,10 +376,11 @@ def s_pop():
 def t_root():
     value = request.json.get("value")
     tree["root"] = {"id": new_id(), "value": value, "children": []}
-    return jsonify(tree=tree["root"])
+    return jsonify(render=render_tree_html(tree["root"]))
 
 @app.post("/tree/add_child")
 def t_child():
+    # front-end should pass "target" id; if not provided, do nothing
     target = request.json.get("target")
     value  = request.json.get("value")
 
@@ -352,60 +393,98 @@ def t_child():
                 return True
         return False
 
-    if tree["root"]:
+    if tree["root"] and target:
         add(tree["root"])
 
-    return jsonify(tree=tree["root"])
+    return jsonify(render=render_tree_html(tree["root"]) if tree["root"] else "")
 
 # BINARY TREE API
+def render_bt_html(node):
+    if not node:
+        return ""
+    val = escape(str(node.get("value", "")))
+    left_html = render_bt_html(node.get("left"))
+    right_html = render_bt_html(node.get("right"))
+    # simple visual: node value followed by child container
+    return f"<div class='bt-node' data-id='{node.get('id')}' style='margin:6px 0;'><div class='bt-val'>{val}</div><div class='bt-children' style='margin-left:16px'>{left_html}{right_html}</div></div>"
+
+def find_node_by_id(node, target):
+    if not node:
+        return None
+    if node.get("id") == target:
+        return node
+    left = find_node_by_id(node.get("left"), target)
+    if left:
+        return left
+    return find_node_by_id(node.get("right"), target)
+
 @app.post("/bt/add_left")
 def bt_left():
-    parent = request.json.get("parent")
+    parent = request.json.get("parent")  # optional
     value = request.json.get("value")
-
-    def find(node):
-        if not node: return None
-        if node["id"] == parent: return node
-        left = find(node.get("left"))
-        if left: return left
-        return find(node.get("right"))
 
     if not bt["root"]:
         bt["root"] = {"id": new_id(), "value": value, "left": None, "right": None}
     else:
-        node = find(bt["root"])
-        if node and node.get("left") is None:
-            node["left"] = {"id": new_id(), "value": value, "left": None, "right": None}
+        # if parent provided, find and attach; otherwise attach to root's left if empty
+        if parent:
+            node = find_node_by_id(bt["root"], parent)
+            if node and node.get("left") is None:
+                node["left"] = {"id": new_id(), "value": value, "left": None, "right": None}
+        else:
+            # attach to root.left if empty, else try to attach to first available left-most node
+            if bt["root"].get("left") is None:
+                bt["root"]["left"] = {"id": new_id(), "value": value, "left": None, "right": None}
+            else:
+                # fallback: attach as left-most available
+                cur = bt["root"]
+                while cur.get("left"):
+                    cur = cur["left"]
+                cur["left"] = {"id": new_id(), "value": value, "left": None, "right": None}
 
-    return jsonify(bt=bt["root"])
+    return jsonify(render=render_bt_html(bt["root"]))
 
 @app.post("/bt/add_right")
 def bt_right():
-    parent = request.json.get("parent")
+    parent = request.json.get("parent")  # optional
     value = request.json.get("value")
-
-    def find(node):
-        if not node: return None
-        if node["id"] == parent: return node
-        left = find(node.get("left"))
-        if left: return left
-        return find(node.get("right"))
 
     if not bt["root"]:
         bt["root"] = {"id": new_id(), "value": value, "left": None, "right": None}
     else:
-        node = find(bt["root"])
-        if node and node.get("right") is None:
-            node["right"] = {"id": new_id(), "value": value, "left": None, "right": None}
+        if parent:
+            node = find_node_by_id(bt["root"], parent)
+            if node and node.get("right") is None:
+                node["right"] = {"id": new_id(), "value": value, "left": None, "right": None}
+        else:
+            if bt["root"].get("right") is None:
+                bt["root"]["right"] = {"id": new_id(), "value": value, "left": None, "right": None}
+            else:
+                cur = bt["root"]
+                while cur.get("right"):
+                    cur = cur["right"]
+                cur["right"] = {"id": new_id(), "value": value, "left": None, "right": None}
 
-    return jsonify(bt=bt["root"])
+    return jsonify(render=render_bt_html(bt["root"]))
 
 @app.post("/bt/reset")
 def bt_reset():
     bt["root"] = None
-    return jsonify(status="reset")
+    return jsonify(render="")
 
 # BST API
+def render_bst_html(node):
+    if not node:
+        return ""
+    val = escape(str(node.get("value", "")))
+    left = render_bst_html(node.get("left"))
+    right = render_bst_html(node.get("right"))
+    # represent BST using nested lists for clarity
+    inner = ""
+    if left or right:
+        inner = f"<div style='margin-left:16px'>{left}{right}</div>"
+    return f"<div class='bst-node' data-value='{val}' style='margin:6px 0;'><div class='bst-val'>{val}</div>{inner}</div>"
+
 @app.post("/bst/insert")
 def bst_insert():
     raw = request.json.get("value")
@@ -425,12 +504,12 @@ def bst_insert():
         return node
 
     bst["root"] = insert(bst["root"], value)
-    return jsonify(bst=bst["root"])
+    return jsonify(render=render_bst_html(bst["root"]))
 
 @app.post("/bst/reset")
 def bst_reset():
     bst["root"] = None
-    return jsonify(status="reset")
+    return jsonify(render="")
 
 # RUN
 if __name__ == "__main__":

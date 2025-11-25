@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block title %}DSAWebLectures{% endblock %}
 {% block content %}
+
+<div id="bg-grid"></div>
+
 <div class="homepage-wrapper">
 
   <!-- WELCOME -->
@@ -23,6 +26,9 @@
 
 {% block scripts %}
 <script>
+/* ============================= */
+/* SEARCH + DISPLAY RESULTS      */
+/* ============================= */
 const searchBar = document.getElementById("home-search");
 const feed = document.getElementById("feed-scroll");
 const welcome = document.getElementById("welcome-section");
@@ -51,8 +57,14 @@ function performSearch() {
   const query = searchBar.value.trim();
   if (query === "") return;
 
-  fetch(`/search_posts?q=${encodeURIComponent(query)}`, { method: "GET", headers: { "Accept": "application/json" } })
-    .then(response => { if (!response.ok) throw new Error("Network error"); return response.json(); })
+  fetch(`/search_posts?q=${encodeURIComponent(query)}`, {
+    method: "GET",
+    headers: { "Accept": "application/json" }
+  })
+    .then(response => {
+      if (!response.ok) throw new Error("Network error");
+      return response.json();
+    })
     .then(data => displayResults(data))
     .catch(err => {
       console.error(err);
@@ -60,7 +72,36 @@ function performSearch() {
     });
 }
 
-searchBar.addEventListener("keydown", e => { if (e.key === "Enter") performSearch(); });
+searchBar.addEventListener("keydown", e => {
+  if (e.key === "Enter") performSearch();
+});
 sendBtn.addEventListener("click", performSearch);
+
+
+/* ============================= */
+/* BACKGROUND GRID SYSTEM        */
+/* ============================= */
+
+const grid = document.getElementById("bg-grid");
+
+function generateGrid() {
+  grid.innerHTML = "";
+
+  const size = 30;
+  const cols = Math.ceil(window.innerWidth / size);
+  const rows = Math.ceil(window.innerHeight / size);
+
+  grid.style.gridTemplateColumns = `repeat(${cols}, ${size}px)`;
+  grid.style.gridTemplateRows = `repeat(${rows}, ${size}px)`;
+
+  for (let i = 0; i < cols * rows; i++) {
+    const cell = document.createElement("div");
+    cell.classList.add("grid-cell");
+    grid.appendChild(cell);
+  }
+}
+
+generateGrid();
+window.addEventListener("resize", generateGrid);
 </script>
 {% endblock scripts %}
