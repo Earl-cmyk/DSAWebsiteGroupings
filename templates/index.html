@@ -14,14 +14,25 @@
   }
 
   .grid-cell {
-    width: 30px;
-    height: 30px;
+    width: 60px;
+    height: 60px;
     background: #0a1a3a;
-    transition: background 0.12s linear;
+    transition: background 0.12s linear, box-shadow 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+    box-sizing: border-box;
+    border: 2px solid rgba(255,255,255,0.06);
+    opacity: 1;
+  }
+
+  .grid-cell:hover {
+    border-color: rgba(255,255,255,0.12);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    transform: translateY(-2px);
   }
 
   .grid-cell.active {
     background: #1e90ff;
+    border-color: rgba(30,144,255,0.9);
+    box-shadow: 0 0 14px rgba(30,144,255,0.35), inset 0 0 6px rgba(255,255,255,0.04);
   }
 
   @keyframes cellPulse {
@@ -71,7 +82,14 @@ function displayResults(data) {
   data.forEach(post => {
     const bubble = document.createElement("div");
     bubble.className = "ai-response";
-    bubble.innerHTML = `<strong>${post.title}</strong><br><span class="preserve">${post.caption}</span>`;
+    const maxVal = post.max_value ?? (post.caption ? post.caption : 'None');
+    const related = post.related_count ?? 0;
+    bubble.innerHTML = `
+      <strong>${post.title}</strong>
+      <br>
+      <span class="preserve">${post.caption}</span>
+      <div class="search-subtitle">Max Value: ${maxVal} &nbsp; • &nbsp; Related Topics: ${related}</div>
+    `.trim();
     feed.appendChild(bubble);
   });
 
@@ -144,5 +162,19 @@ document.addEventListener("DOMContentLoaded", () => {
     ({ cols, rows, cells } = createGrid());
   });
 });
+
+document.getElementById("bst-max").onclick = async () => {
+  const res = await fetch("/bst/max");
+  const data = await res.json();
+  document.getElementById("bst-info").innerText =
+    "Max Value: " + data.max;
+};
+
+document.getElementById("bst-height").onclick = async () => {
+  const res = await fetch("/bst/height");
+  const data = await res.json();
+  document.getElementById("bst-info").innerText =
+    "Tree Height: " + data.height;
+};
 </script>
 {% endblock scripts %}

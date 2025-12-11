@@ -195,7 +195,7 @@ body {
 }
 
 #post-form {
-    display: flex;
+    display: reflex;
     flex-direction: column;
   }
 
@@ -248,6 +248,25 @@ body {
   width: 100%;
   margin-top: 10px;
   border-radius: 8px;
+}
+
+/* Make inline SVG demos responsive and prevent overflowing large fixed heights */
+.post-card svg,
+#posts-list svg,
+.post-card > div svg {
+  width: 100% !important;
+  height: auto !important;
+  display: block;
+  max-height: 60vh; /* keep very tall diagrams from overwhelming the viewport */
+}
+
+/* For narrow screens, reduce max height so the demo fits comfortably */
+@media (max-width: 600px) {
+  .post-card svg,
+  #posts-list svg,
+  .post-card > div svg {
+    max-height: 40vh;
+  }
 }
 
 /* ===================== FOOTER ACTIONS ===================== */
@@ -454,6 +473,12 @@ body {
   border-radius: 14px;
   margin: 1rem 0;
   animation: fadeIn 0.35s ease;
+}
+
+.search-subtitle {
+  color: #6b7c9a;
+  margin-top: 6px;
+  font-size: 0.9rem;
 }
 
 .chat-input-bar {

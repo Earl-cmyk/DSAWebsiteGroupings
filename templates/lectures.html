@@ -12,8 +12,8 @@
   }
 
   .grid-cell {
-    width: 30px;
-    height: 30px;
+    width: 65px;
+    height: 65px;
     background: #0a1a3a;
     transition: background 0.12s linear;
   }
@@ -38,7 +38,7 @@
 
 <main class="lectures-page">
   <section class="lectures-header">
-    <button id="btn-create-post" aria-haspopup="dialog">Create a Post</button>
+    <button id="btn-create-post" class="btn btn-primary" aria-haspopup="dialog">Create a Post</button>
   </section>
 <section id="posts-list">
 
@@ -160,6 +160,10 @@
           <h3 class="post-title">{{ post.title }}</h3>
           <p class="post-caption preserve">{{ post.caption }}</p>
         </header>
+        <div class="post-meta" style="margin-top:8px;color:var(--muted);font-size:0.9rem;">
+          <strong>Max Value:</strong> {{ post.max_value }} &nbsp; • &nbsp;
+          <strong>Related Topics:</strong> {{ post.related_count }}
+        </div>
         <footer>
           <button class="vote-up" data-id="{{ post.id }}">▲ <span class="count">{{ post.up }}</span></button>
           <button class="vote-down" data-id="{{ post.id }}">▼ <span class="count">{{ post.down }}</span></button>
@@ -282,6 +286,29 @@ document.querySelectorAll('.edit-post').forEach(btn => {
   });
 });
 
+/* Helper: safely insert an SVG string into an HTML container preserving namespace
+   Uses DOMParser to avoid HTML->SVG namespace issues that can prevent rendering */
+function insertSVG(container, svgString) {
+  if (!container) return;
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(svgString, 'image/svg+xml');
+    const svg = doc.querySelector('svg');
+    container.innerHTML = '';
+    if (svg) {
+      svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      svg.removeAttribute('width');
+      svg.removeAttribute('height');
+      container.appendChild(svg);
+    } else {
+      // fallback to raw HTML insertion
+      container.innerHTML = svgString;
+    }
+  } catch (e) {
+    container.innerHTML = svgString;
+  }
+}
+
     /* ============================= */
 /* QUEUE DEMO                    */
 /* ============================= */
@@ -295,13 +322,13 @@ document.getElementById("queue-enqueue").onclick = async () => {
   });
 
   const data = await res.json();
-  if (data.svg) document.getElementById("queue-display").innerHTML = data.svg;
+  if (data.svg) insertSVG(document.getElementById("queue-display"), data.svg);
 };
 
 document.getElementById("queue-dequeue").onclick = async () => {
   const res = await fetch("/queue/dequeue", { method: "POST" });
   const data = await res.json();
-  if (data.svg) document.getElementById("queue-display").innerHTML = data.svg;
+  if (data.svg) insertSVG(document.getElementById("queue-display"), data.svg);
 };
 
 
@@ -318,13 +345,13 @@ document.getElementById("stack-push").onclick = async () => {
   });
 
   const data = await res.json();
-  if (data.svg) document.getElementById("stack-display").innerHTML = data.svg;
+  if (data.svg) insertSVG(document.getElementById("stack-display"), data.svg);
 };
 
 document.getElementById("stack-pop").onclick = async () => {
   const res = await fetch("/stack/pop", { method: "POST" });
   const data = await res.json();
-  if (data.svg) document.getElementById("stack-display").innerHTML = data.svg;
+  if (data.svg) insertSVG(document.getElementById("stack-display"), data.svg);
 };
 
 
@@ -341,7 +368,7 @@ document.getElementById("tree-add-root").onclick = async () => {
   });
 
   const data = await res.json();
-  if (data.svg) document.getElementById("tree-display").innerHTML = data.svg;
+  if (data.svg) insertSVG(document.getElementById("tree-display"), data.svg);
 };
 
 document.getElementById("tree-add-child").onclick =
@@ -361,7 +388,7 @@ document.getElementById("bt-add-left").onclick = async () => {
   });
 
   const data = await res.json();
-  if (data.svg) document.getElementById("bt-display").innerHTML = data.svg;
+  if (data.svg) insertSVG(document.getElementById("bt-display"), data.svg);
 };
 
 document.getElementById("bt-add-right").onclick = async () => {
@@ -374,13 +401,13 @@ document.getElementById("bt-add-right").onclick = async () => {
   });
 
   const data = await res.json();
-  if (data.svg) document.getElementById("bt-display").innerHTML = data.svg;
+  if (data.svg) insertSVG(document.getElementById("bt-display"), data.svg);
 };
 
 document.getElementById("bt-reset").onclick = async () => {
   const res = await fetch("/bt/reset", { method: "POST" });
   const data = await res.json();
-  if (data.svg) document.getElementById("bt-display").innerHTML = data.svg;
+  if (data.svg) insertSVG(document.getElementById("bt-display"), data.svg);
 };
 
 
@@ -397,7 +424,7 @@ document.getElementById("bst-insert").onclick = async () => {
   });
 
   const data = await res.json();
-  if (data.svg) document.getElementById("bst-display").innerHTML = data.svg;
+  if (data.svg) insertSVG(document.getElementById("bst-display"), data.svg);
 };
 
 document.getElementById("bst-reset").onclick = () => {
@@ -414,7 +441,7 @@ document.getElementById("bst-reset").onclick = () => {
   });
 
   const data = await res.json();
-  if (data.svg) document.getElementById("bst-display").innerHTML = data.svg;
+  if (data.svg) insertSVG(document.getElementById("bst-display"), data.svg);
 };
 
 

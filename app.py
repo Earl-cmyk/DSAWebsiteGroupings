@@ -191,10 +191,32 @@ def home():
             ORDER BY id DESC
         """, (f"%{keyword}%", f"%{keyword}%")).fetchall()
 
-        return jsonify([
-            {"id": r["id"], "title": r["title"], "caption": r["caption"]}
-            for r in sql_results
-        ])
+        results = []
+        for r in sql_results:
+            cid = r["id"]
+            title = r["title"] or ""
+            caption = r["caption"] or ""
+            max_value = caption if caption.strip() else "None"
+
+            # related_count: naive heuristic using first word of title
+            related_count = 0
+            if title.strip():
+                first_word = title.strip().split()[0]
+                q = db.execute(
+                    "SELECT COUNT(*) as c FROM posts WHERE (title LIKE ? OR caption LIKE ?) AND id != ?",
+                    (f"%{first_word}%", f"%{first_word}%", cid)
+                ).fetchone()
+                related_count = q["c"] if q is not None else 0
+
+            results.append({
+                "id": cid,
+                "title": title,
+                "caption": caption,
+                "max_value": max_value,
+                "related_count": related_count
+            })
+
+        return jsonify(results)
 
     # default homepage load
     posts = get_feed_stack()
@@ -213,10 +235,29 @@ def search_posts():
         ORDER BY id DESC
     """, (f"%{q}%", f"%{q}%")).fetchall()
 
-    results = [
-        {"id": r["id"], "title": r["title"], "caption": r["caption"]}
-        for r in rows
-    ]
+    results = []
+    for r in rows:
+        cid = r["id"]
+        title = r["title"] or ""
+        caption = r["caption"] or ""
+        max_value = caption if caption.strip() else "None"
+
+        related_count = 0
+        if title.strip():
+            first_word = title.strip().split()[0]
+            rr = db.execute(
+                "SELECT COUNT(*) as c FROM posts WHERE (title LIKE ? OR caption LIKE ?) AND id != ?",
+                (f"%{first_word}%", f"%{first_word}%", cid)
+            ).fetchone()
+            related_count = rr["c"] if rr is not None else 0
+
+        results.append({
+            "id": cid,
+            "title": title,
+            "caption": caption,
+            "max_value": max_value,
+            "related_count": related_count
+        })
 
     return jsonify(results)
 
@@ -277,6 +318,35 @@ def lectures():
     ]
 
     final_posts = interactive_posts + db_posts
+    # Enrich regular posts with two helper fields:
+    # - max_value: show the post's caption (or 'None')
+    # - related_count: number of other posts that share a keyword from this title
+    db = get_db()
+    for post in final_posts:
+        try:
+            if post.get("id", 0) > 0:
+                # max_value: use caption or 'None'
+                post["max_value"] = post.get("caption") or "None"
+
+                # related_count: use the first word of the title to find related posts
+                title = (post.get("title") or "").strip()
+                if title:
+                    first_word = title.split()[0]
+                    q = db.execute(
+                        "SELECT COUNT(*) as c FROM posts WHERE (title LIKE ? OR caption LIKE ?) AND id != ?",
+                        (f"%{first_word}%", f"%{first_word}%", post["id"])
+                    ).fetchone()
+                    post["related_count"] = q["c"] if q is not None else 0
+                else:
+                    post["related_count"] = 0
+            else:
+                # interactive placeholders: show N/A
+                post["max_value"] = "N/A"
+                post["related_count"] = 0
+        except Exception:
+            post["max_value"] = post.get("caption") or "None"
+            post["related_count"] = 0
+
     return render_template("lectures.html", posts=final_posts)
 
 @app.route("/create_post", methods=["POST"])
