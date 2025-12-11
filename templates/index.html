@@ -88,7 +88,8 @@ function displayResults(data) {
       <strong>${post.title}</strong>
       <br>
       <span class="preserve">${post.caption}</span>
-      <div class="search-subtitle">Max Value: ${maxVal} &nbsp; • &nbsp; Related Topics: ${related}</div>
+      <div class="search-subtitle">
+      Related Topics: ${related}${post.latest_comment ? ' &nbsp; • &nbsp; Latest: ' + (post.latest_comment) : ''}</div>
     `.trim();
     feed.appendChild(bubble);
   });

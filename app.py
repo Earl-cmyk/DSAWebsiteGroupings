@@ -146,6 +146,41 @@ def init_db():
         conn.commit()
         conn.close()
 
+    # Run simple migration: ensure comments table has parent_id for nested threads
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(comments)")
+        cols = [r[1] for r in cur.fetchall()]
+        if 'parent_id' not in cols:
+            try:
+                cur.execute("ALTER TABLE comments ADD COLUMN parent_id INTEGER")
+                conn.commit()
+            except Exception:
+                # ignore if cannot alter (older sqlite versions), app will still work without nested threads storage
+                pass
+        # ensure attachments table exists
+        cur.execute("PRAGMA table_info(attachments)")
+        cols = [r[1] for r in cur.fetchall()]
+        if not cols:
+            try:
+                cur.execute('''
+                CREATE TABLE IF NOT EXISTS attachments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    post_id INTEGER NOT NULL,
+                    filename TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(post_id) REFERENCES posts(id)
+                );
+                ''')
+                conn.commit()
+            except Exception:
+                pass
+        conn.close()
+    except Exception:
+        pass
+
 # -------------------------
 # FEED / SEARCH LOGIC
 # -------------------------
@@ -156,7 +191,7 @@ def get_feed_stack():
     stack = Stack()
     for r in rows:
         # convert sqlite Row to regular dict to avoid sqlite Row quirks in templates/JS
-        stack.push({
+        post = {
             "id": r["id"],
             "title": r["title"],
             "caption": r["caption"],
@@ -164,7 +199,31 @@ def get_feed_stack():
             "post_type": r["post_type"],
             "up": r["up"] if r["up"] is not None else 0,
             "down": r["down"] if r["down"] is not None else 0,
-        })
+        }
+        # include latest comment (if any)
+        try:
+            latest = db.execute("SELECT comment, created_at FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1", (r["id"],)).fetchone()
+            if latest:
+                post["latest_comment"] = latest["comment"]
+                post["latest_comment_time"] = latest["created_at"]
+            else:
+                post["latest_comment"] = None
+                post["latest_comment_time"] = None
+        except Exception:
+            post["latest_comment"] = None
+            post["latest_comment_time"] = None
+
+        # include attachments for this post
+        try:
+            rows = db.execute("SELECT id, filename, path FROM attachments WHERE post_id=? ORDER BY id ASC", (r["id"],)).fetchall()
+            atts = []
+            for a in rows:
+                atts.append({"id": a[0], "filename": a[1], "url": (a[2] if a[2].startswith('static/') else a[2])})
+            post["attachments"] = atts
+        except Exception:
+            post["attachments"] = []
+
+        stack.push(post)
     return stack.to_list()
 
 def perform_bst_search(keyword):
@@ -215,6 +274,13 @@ def home():
                 "max_value": max_value,
                 "related_count": related_count
             })
+        # attach latest comment for each result (if present)
+        for item in results:
+            try:
+                latest = db.execute("SELECT comment FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1", (item['id'],)).fetchone()
+                item['latest_comment'] = latest['comment'] if latest else None
+            except Exception:
+                item['latest_comment'] = None
 
         return jsonify(results)
 
@@ -258,6 +324,13 @@ def search_posts():
             "max_value": max_value,
             "related_count": related_count
         })
+    # attach latest comment for each search result
+    for item in results:
+        try:
+            latest = db.execute("SELECT comment FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1", (item['id'],)).fetchone()
+            item['latest_comment'] = latest['comment'] if latest else None
+        except Exception:
+            item['latest_comment'] = None
 
     return jsonify(results)
 
@@ -352,19 +425,78 @@ def lectures():
 @app.route("/create_post", methods=["POST"])
 def create_post():
     db = get_db()
-    db.execute("""
+    title = request.form.get("title")
+    caption = request.form.get("caption")
+    author = request.form.get("author", "Anonymous")
+    post_type = request.form.get("post_type", "regular")
+
+    cur = db.cursor()
+    cur.execute("""
         INSERT INTO posts(title, caption, author, post_type, up, down)
         VALUES (?, ?, ?, ?, 0, 0)
-    """, (
-        request.form.get("title"),
-        request.form.get("caption"),
-        request.form.get("author", "Anonymous"),
-        request.form.get("post_type", "regular")
-    ))
+    """, (title, caption, author, post_type))
     db.commit()
+    post_id = cur.lastrowid
+
+    # handle uploaded attachments (form field 'attachments', multiple allowed)
+    try:
+        files = request.files.getlist('attachments') if request.files else []
+    except Exception:
+        files = []
+
+    if files:
+        upload_dir = os.path.join('static', 'uploads')
+        os.makedirs(upload_dir, exist_ok=True)
+        for f in files:
+            if not f or f.filename == '':
+                continue
+            safe_name = f"{uuid.uuid4().hex}_{escape_text(f.filename)}"
+            dest = os.path.join(upload_dir, safe_name)
+            try:
+                f.save(dest)
+                db.execute("INSERT INTO attachments (post_id, filename, path) VALUES (?, ?, ?)", (post_id, f.filename, dest))
+            except Exception:
+                pass
+        db.commit()
+
     return redirect(url_for("lectures"))
 
-@app.route("/vote/<int:id>/<string:way>", methods=["GET"])
+
+@app.route('/comments/add', methods=['POST'])
+def comments_add():
+    db = get_db()
+    # support both form and JSON
+    post_id = request.form.get('post_id') or request.json.get('post_id')
+    comment = request.form.get('comment') or request.json.get('comment')
+    parent_id = request.form.get('parent_id') or request.json.get('parent_id')
+    author = request.form.get('author') or request.json.get('author') or 'Anonymous'
+
+    try:
+        post_id_int = int(post_id)
+    except Exception:
+        return jsonify({'ok': False, 'error': 'invalid post id'})
+
+    if not comment:
+        return jsonify({'ok': False, 'error': 'empty comment'})
+
+    # Keep whitespace as-is (do not strip)
+    db.execute("INSERT INTO comments (post_id, user_id, comment, parent_id) VALUES (?, NULL, ?, ?)",
+               (post_id_int, comment, parent_id))
+    db.commit()
+
+    # return latest comment for convenience
+    row = db.execute("SELECT id, comment, created_at FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1", (post_id_int,)).fetchone()
+    return jsonify({'ok': True, 'comment': dict(row) if row else None})
+
+
+@app.route('/posts/<int:post_id>/comments')
+def comments_for_post(post_id):
+    db = get_db()
+    rows = db.execute("SELECT id, post_id, user_id, comment, parent_id, created_at FROM comments WHERE post_id=? ORDER BY id ASC", (post_id,)).fetchall()
+    results = [dict(r) for r in rows]
+    return jsonify(results)
+
+@app.route("/vote/<int:id>/<string:way>", methods=["POST"])
 def vote(id, way):
     db = get_db()
     if way == "up":
@@ -372,33 +504,51 @@ def vote(id, way):
     else:
         db.execute("UPDATE posts SET down = down + 1 WHERE id=?", (id,))
     db.commit()
-    return redirect(url_for("lectures"))
+    row = db.execute("SELECT up, down FROM posts WHERE id=?", (id,)).fetchone()
+    if row:
+        return jsonify({"ok": True, "up": row[0], "down": row[1]})
+    return jsonify({"ok": False}), 404
 
-# accept POST from fetch in your UI (was GET previously)
+# schedule a cancellable delete from the UI (5 second delay)
+def perform_delete(post_id):
+    """Perform deletion using a fresh DB connection (safe from background threads)."""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        conn.execute("DELETE FROM posts WHERE id=?", (post_id,))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+    finally:
+        try:
+            pending_deletes.pop(post_id, None)
+        except Exception:
+            pass
+
+
 @app.route("/delete/<int:id>", methods=["POST"])
-def delete(id):
-    # demonstrate queue-based delete: enqueue & dequeue then delete
-    q = QueueLinked()
-    q.enqueue(id)
-    post_id = q.dequeue()
-    if post_id is None:
-        return jsonify(status="no-op"), 200
+def schedule_delete(id):
+    global pending_deletes
+    if id in pending_deletes:
+        return jsonify({"ok": True, "pending": True})
 
-    db = get_db()
-    db.execute("DELETE FROM posts WHERE id=?", (post_id,))
-    db.commit()
-    return jsonify(status="deleted"), 200
+    t = threading.Timer(5.0, perform_delete, args=(id,))
+    pending_deletes[id] = t
+    t.start()
+    return jsonify({"ok": True, "scheduled": True})
 
-def delayed_delete(post_id, delay=5):
-    time.sleep(delay)
-    db = get_db()
-    db.execute("DELETE FROM posts WHERE id=?", (post_id,))
-    db.commit()
 
-@app.route("/delete/<int:id>", methods=["POST"])
-def delete_post(post_id):
-    threading.Thread(target=delayed_delete, args=(post_id,5)).start()
-    return jsonify({"ok": True})
+@app.route('/delete/cancel/<int:id>', methods=['POST'])
+def cancel_delete(id):
+    global pending_deletes
+    t = pending_deletes.pop(id, None)
+    if t:
+        try:
+            t.cancel()
+        except Exception:
+            pass
+        return jsonify({"ok": True, "cancelled": True})
+    return jsonify({"ok": False, "error": "not_pending"}), 404
 
 # Edit should accept the same form fields used by your modal (title, caption, author)
 @app.route("/edit/<int:id>", methods=["POST"])
@@ -428,7 +578,18 @@ def collaborators_page():
 queue = []
 stack = []
 tree_root = None
+tree_roots = []
 bst_root = None
+bt_roots = []
+# Graph in-memory: vertices list and edges weight map
+graph_vertices = []  # list of dicts: {id, label}
+graph_edges = {}     # map (u_id, v_id) -> weight (int)
+# edge weights used for trees/BT as well
+edge_weights = {}
+# pending deletions store: post_id -> threading.Timer
+pending_deletes = {}
+# pending detached subtrees store: token -> (type, node)
+pending_subtrees = {}
 
 # ----------------------
 # Tree / BST classes
@@ -438,6 +599,12 @@ class TreeNode:
         self.val = val
         self.left = None
         self.right = None
+        # support n-ary children for general Tree demo
+        self.children = []
+        try:
+            self.id = str(uuid.uuid4())
+        except Exception:
+            self.id = None
 
 # ----------------------
 # Helpers
@@ -458,7 +625,7 @@ def escape_text(text):
 def render_queue_svg():
     width = max(300, 120 * max(1, len(queue)))
     height = 120
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
     for i, val in enumerate(queue):
         x = 20 + i * 120
         parts.append(f'<rect x="{x}" y="30" width="100" height="60" rx="8" fill="#4cc9ff" stroke="#fff"/>')
@@ -469,7 +636,7 @@ def render_queue_svg():
 def render_stack_svg():
     width = 200
     height = max(120, 80 * len(stack) + 20)
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
     for i, val in enumerate(reversed(stack)):
         y = 20 + i * 80
         parts.append(f'<rect x="40" y="{y}" width="120" height="60" rx="8" fill="#90f1a9" stroke="#fff"/>')
@@ -479,27 +646,85 @@ def render_stack_svg():
 
 def render_generic_tree_svg(root):
     if not root:
-        return '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="200"></svg>'
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200"></svg>'
 
-    width, height = 1000, 500
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
+    width, height = 1000, 600
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
 
-    def traverse(node, x, y, level):
+    def traverse(node, x, y, level, span=200):
         if not node:
             return
-        offset = 200 / level
-        if node.left:
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{x-offset*2}" y2="{y+80}" stroke="#fff"/>')
-        if node.right:
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{x+offset*2}" y2="{y+80}" stroke="#fff"/>')
-        parts.append(f'<circle cx="{x}" cy="{y}" r="25" fill="#f8c537" stroke="#fff"/>')
-        parts.append(f'<text x="{x}" y="{y+5}" font-size="20" text-anchor="middle" fill="#000">{escape_text(node.val)}</text>')
-        traverse(node.left, x-offset*2, y+80, level+1)
-        traverse(node.right, x+offset*2, y+80, level+1)
+        # determine children (support both children list and legacy left/right)
+        childs = []
+        if getattr(node, 'children', None):
+            childs = [c for c in node.children if c]
+        else:
+            if node.left: childs.append(node.left)
+            if node.right: childs.append(node.right)
 
-    traverse(root, 500, 40, 1)
+        n = len(childs)
+        gap = span // max(1, n)
+        start_x = x - (gap * (n - 1)) / 2
+
+        for i, ch in enumerate(childs):
+            cx = int(start_x + i * gap)
+            cy = y + 100
+            # edge weight lookup
+            w = edge_weights.get((getattr(node, 'id', ''), getattr(ch, 'id', '')), 1)
+            parts.append(f'<line x1="{x}" y1="{y}" x2="{cx}" y2="{cy}" stroke="#fff" stroke-width="{1 + (w-1)}"/>')
+            if w > 1:
+                mx = (x + cx) // 2
+                my = (y + cy) // 2
+                parts.append(f'<text x="{mx}" y="{my}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+            traverse(ch, cx, cy, level + 1, max(60, span // 2))
+
+        # include data-id and data-val attributes so client-side can bind click handlers
+        parts.append(f'<circle cx="{x}" cy="{y}" r="25" fill="#f8c537" stroke="#fff" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
+        parts.append(f'<text x="{x}" y="{y+5}" font-size="18" text-anchor="middle" fill="#000">{escape_text(node.val)}</text>')
+
+    traverse(root, width // 2, 60, 1, 400)
     parts.append('</svg>')
     return "".join(parts)
+
+
+def render_tree_forest_svg(roots):
+    # render multiple general trees stacked vertically
+    if not roots:
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 200" width="1000" height="200"></svg>'
+    width = 1000
+    per_h = 260
+    total_h = per_h * len(roots)
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{total_h}" viewBox="0 0 {width} {total_h}">']
+
+    def traverse(node, x, y, level, span=200):
+        if not node:
+            return
+        childs = []
+        if getattr(node, 'children', None):
+            childs = [c for c in node.children if c]
+        else:
+            if node.left: childs.append(node.left)
+            if node.right: childs.append(node.right)
+
+        n = len(childs)
+        gap = span // max(1, n)
+        start_x = x - (gap * (n - 1)) / 2
+
+        for i, ch in enumerate(childs):
+            cx = int(start_x + i * gap)
+            cy = y + 100
+            parts.append(f'<line x1="{x}" y1="{y}" x2="{cx}" y2="{cy}" stroke="#fff"/>')
+            traverse(ch, cx, cy, level + 1, max(60, span // 2))
+
+        parts.append(f'<circle cx="{x}" cy="{y}" r="25" fill="#f8c537" stroke="#fff" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
+        parts.append(f'<text x="{x}" y="{y+5}" font-size="20" text-anchor="middle" fill="#000">{escape_text(node.val)}</text>')
+
+    for i, root in enumerate(roots):
+        y0 = 40 + i * per_h
+        traverse(root, width//2, y0, 1)
+
+    parts.append('</svg>')
+    return ''.join(parts)
 
 # ----------------------
 # BST helpers
@@ -507,6 +732,9 @@ def render_generic_tree_svg(root):
 def bst_insert(node, val):
     if not node:
         return TreeNode(val)
+    # prevent duplicate values: if equal, do nothing
+    if val == node.val:
+        return node
     if val < node.val:
         node.left = bst_insert(node.left, val)
     else:
@@ -520,66 +748,214 @@ bt_root = None
 
 def render_binary_tree_svg(root):
     if not root:
-        return '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="400"></svg>'
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400"></svg>'
 
-    parts = ['<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="500">']
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="500" viewBox="0 0 1000 500">']
 
     def walk(node, x, y, spread):
         if not node:
             return
 
         if node.left:
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{x-spread}" y2="{y+100}" stroke="white"/>')
-            walk(node.left, x-spread, y+100, spread//2)
+            lx = x-spread
+            ly = y+100
+            w = edge_weights.get((getattr(node,'id',''), getattr(node.left,'id','')), 1)
+            parts.append(f'<line x1="{x}" y1="{y}" x2="{lx}" y2="{ly}" stroke="white" stroke-width="{1 + (w-1)}"/>')
+            if w > 1:
+                parts.append(f'<text x="{(x+lx)//2}" y="{(y+ly)//2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+            walk(node.left, lx, ly, spread//2)
 
         if node.right:
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{x+spread}" y2="{y+100}" stroke="white"/>')
-            walk(node.right, x+spread, y+100, spread//2)
+            rx = x+spread
+            ry = y+100
+            w = edge_weights.get((getattr(node,'id',''), getattr(node.right,'id','')), 1)
+            parts.append(f'<line x1="{x}" y1="{y}" x2="{rx}" y2="{ry}" stroke="white" stroke-width="{1 + (w-1)}"/>')
+            if w > 1:
+                parts.append(f'<text x="{(x+rx)//2}" y="{(y+ry)//2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+            walk(node.right, rx, ry, spread//2)
 
-        parts.append(f'<circle cx="{x}" cy="{y}" r="25" fill="#ff6b6b" stroke="white"/>')
+        parts.append(f'<circle cx="{x}" cy="{y}" r="25" fill="#ff6b6b" stroke="white" data-id="{node.id}" data-val="{escape_text(node.val)}"/>')
         parts.append(f'<text x="{x}" y="{y+6}" text-anchor="middle" font-size="18" fill="black">{escape_text(node.val)}</text>')
 
     walk(root, 500, 50, 200)
     parts.append('</svg>')
     return "".join(parts)
 
+
+def render_bt_forest_svg(roots):
+    # render multiple binary trees stacked vertically
+    if not roots:
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 200" width="1000" height="200"></svg>'
+    width = 1000
+    per_h = 300
+    total_h = per_h * len(roots)
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{total_h}" viewBox="0 0 {width} {total_h}">']
+
+    def walk(node, x, y, spread):
+        if not node:
+            return
+        if node.left:
+            lx = x-spread
+            ly = y+100
+            w = edge_weights.get((getattr(node,'id',''), getattr(node.left,'id','')), 1)
+            parts.append(f'<line x1="{x}" y1="{y}" x2="{lx}" y2="{ly}" stroke="white" stroke-width="{1 + (w-1)}"/>')
+            if w > 1:
+                parts.append(f'<text x="{(x+lx)//2}" y="{(y+ly)//2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+            walk(node.left, lx, ly, spread//2)
+        if node.right:
+            rx = x+spread
+            ry = y+100
+            w = edge_weights.get((getattr(node,'id',''), getattr(node.right,'id','')), 1)
+            parts.append(f'<line x1="{x}" y1="{y}" x2="{rx}" y2="{ry}" stroke="white" stroke-width="{1 + (w-1)}"/>')
+            if w > 1:
+                parts.append(f'<text x="{(x+rx)//2}" y="{(y+ry)//2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+            walk(node.right, rx, ry, spread//2)
+        parts.append(f'<circle cx="{x}" cy="{y}" r="25" fill="#ff6b6b" stroke="white" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
+        parts.append(f'<text x="{x}" y="{y+6}" text-anchor="middle" font-size="18" fill="black">{escape_text(node.val)}</text>')
+
+    for i, root in enumerate(roots):
+        y0 = 50 + i * per_h
+        walk(root, width//2, y0, 200)
+
+    parts.append('</svg>')
+    return ''.join(parts)
+
 @app.route("/bt/add-left", methods=["POST"])
 def bt_add_left():
-    global bt_root
-    val = request.json.get("value", "").strip()
+    global bt_root, bt_roots
+    data = request.get_json(silent=True) or {}
+    val = (data.get("value") or request.form.get("value") or "").strip()
+    parent = data.get("parent") or request.form.get("parent")
     if not val:
         return jsonify({"ok": False})
 
-    if not bt_root:
-        bt_root = TreeNode(val)
-    else:
-        if not bt_root.left:
-            bt_root.left = TreeNode(val)
+    if not bt_roots:
+        node = TreeNode(val)
+        bt_roots.append(node)
+        bt_root = bt_roots[0]
+        return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
 
-    return jsonify({"ok": True, "svg": render_binary_tree_svg(bt_root)})
+    def find_bfs_all(roots, v):
+        for r in roots:
+            q = [r]
+            while q:
+                n = q.pop(0)
+                if not n:
+                    continue
+                try:
+                    if getattr(n, 'id', None) == v or str(n.val) == str(v):
+                        return n
+                except Exception:
+                    pass
+                if n.left: q.append(n.left)
+                if n.right: q.append(n.right)
+        return None
+
+    if parent:
+        p = find_bfs_all(bt_roots, parent)
+        if p:
+            if not p.right:
+                p.right = TreeNode(val)
+            else:
+                q = [p.right]
+                placed = False
+                while q and not placed:
+                    n = q.pop(0)
+                    if not n.left:
+                        n.left = TreeNode(val); placed = True; break
+                    if not n.right:
+                        n.right = TreeNode(val); placed = True; break
+                    q.extend([n.left, n.right])
+        else:
+            bt_roots.append(TreeNode(val))
+    else:
+        first = bt_roots[0]
+        if not first.left:
+            first.left = TreeNode(val)
+        else:
+            bt_roots.append(TreeNode(val))
+
+    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
 
 
 @app.route("/bt/add-right", methods=["POST"])
 def bt_add_right():
-    global bt_root
-    val = request.json.get("value", "").strip()
+    global bt_root, bt_roots
+    data = request.get_json(silent=True) or {}
+    val = (data.get("value") or request.form.get("value") or "").strip()
+    parent = data.get("parent") or request.form.get("parent")
     if not val:
         return jsonify({"ok": False})
+    if not bt_roots:
+        # create first root
+        node = TreeNode(val)
+        bt_roots.append(node)
+        bt_root = bt_roots[0]
+        return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
 
-    if not bt_root:
-        bt_root = TreeNode(val)
+    # helper: search across all roots by id or value
+    def find_bfs_all(roots, v):
+        for r in roots:
+            q = [r]
+            while q:
+                n = q.pop(0)
+                if not n:
+                    continue
+                try:
+                    if getattr(n, 'id', None) == v or str(n.val) == str(v):
+                        return n
+                except Exception:
+                    pass
+                if n.left: q.append(n.left)
+                if n.right: q.append(n.right)
+        return None
+
+    if parent:
+        p = find_bfs_all(bt_roots, parent)
+        if p:
+            if not p.left:
+                p.left = TreeNode(val)
+            else:
+                q = [p.left]
+                placed = False
+                while q and not placed:
+                    n = q.pop(0)
+                    if not n.left:
+                        n.left = TreeNode(val); placed = True; break
+                    if not n.right:
+                        n.right = TreeNode(val); placed = True; break
+                    q.extend([n.left, n.right])
+        else:
+            # parent not found -> create new root
+            bt_roots.append(TreeNode(val))
     else:
-        if not bt_root.right:
-            bt_root.right = TreeNode(val)
-
-    return jsonify({"ok": True, "svg": render_binary_tree_svg(bt_root)})
-
+        # no parent -> attempt to insert under first root's right if empty, else create new root
+        first = bt_roots[0]
+        if not first.right:
+            first.right = TreeNode(val)
+        else:
+            bt_roots.append(TreeNode(val))
+    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
+    
 
 @app.route("/bt/reset", methods=["POST"])
 def bt_reset():
     global bt_root
-    bt_root = None
-    return jsonify({"ok": True, "svg": render_binary_tree_svg(bt_root)})
+    global bt_roots
+    bt_roots.clear()
+    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
+
+
+@app.route("/bt/add-root", methods=["POST"])
+def bt_add_root():
+    global bt_roots
+    data = request.get_json(silent=True) or {}
+    val = (data.get("value") or request.form.get("value") or "").strip()
+    if not val:
+        return jsonify({"ok": False})
+    node = TreeNode(val)
+    bt_roots.append(node)
+    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
 
 def bst_search(node, val):
     if not node:
@@ -632,6 +1008,36 @@ def bst_delete(node, val):
 
     return node
 
+
+def bst_detach(node, val):
+    """Detach the node with value `val` from the tree and return (new_tree_root, detached_node).
+    If not found, (node, None) is returned."""
+    if not node:
+        return node, None
+
+    if val < node.val:
+        detached = node
+        return node, detached
+        if not node.left and not node.right:
+            return None, detached
+
+        if not node.left:
+            return node.right, detached
+        if not node.right:
+            return node.left, detached
+
+        # two children: replace with max from left
+        temp_val = bst_find_max(node.left)
+        node.val = temp_val
+        node.left = bst_delete(node.left, temp_val)
+        return node, detached
+
+        # two children: replace with max from left
+        temp_val = bst_find_max(node.left)
+        node.val = temp_val
+        node.left = bst_delete(node.left, temp_val)
+        return node, detached
+
 # ----------------------
 # Routes
 # ----------------------
@@ -668,28 +1074,56 @@ def stack_pop():
 # Generic tree endpoints
 @app.route("/tree/insert", methods=["POST"])
 def tree_insert_route():
-    global tree_root
+    global tree_root, tree_roots
     val = request.json.get("value", "").strip()
+    parent = request.json.get("parent")
     if not val:
         return jsonify({"ok": False})
 
     new_node = TreeNode(val)
-    if not tree_root:
-        tree_root = new_node
+    # If there are no roots yet, create a new root
+    if not tree_roots:
+        tree_roots.append(new_node)
+        tree_root = tree_roots[0]
+        return jsonify({"ok": True, "svg": render_tree_forest_svg(tree_roots)})
+
+    def find_bfs_all(roots, v):
+        for r in roots:
+            q = [r]
+            while q:
+                n = q.pop(0)
+                if n and (getattr(n, 'id', None) == v or str(n.val) == str(v)):
+                    return n
+                if n:
+                    if n.left: q.append(n.left)
+                    if n.right: q.append(n.right)
+        return None
+
+    if parent:
+        pnode = find_bfs_all(tree_roots, parent)
+        if pnode:
+            if not pnode.left:
+                pnode.left = new_node
+            elif not pnode.right:
+                pnode.right = new_node
+            else:
+                q = [pnode.left, pnode.right]
+                placed = False
+                while q and not placed:
+                    n = q.pop(0)
+                    if not n.left:
+                        n.left = new_node; placed = True; break
+                    if not n.right:
+                        n.right = new_node; placed = True; break
+                    q.extend([n.left, n.right])
+        else:
+            # parent not found -> create a new root
+            tree_roots.append(new_node)
     else:
-        # level order insertion
-        q = [tree_root]
-        while q:
-            node = q.pop(0)
-            if not node.left:
-                node.left = new_node
-                break
-            elif not node.right:
-                node.right = new_node
-                break
-            q.append(node.left)
-            q.append(node.right)
-    return jsonify({"ok": True, "svg": render_generic_tree_svg(tree_root)})
+        # no parent -> create a new root (support multiple trees)
+        tree_roots.append(new_node)
+
+    return jsonify({"ok": True, "svg": render_tree_forest_svg(tree_roots)})
 
 # BST endpoints
 @app.route("/bst/insert", methods=["POST"])
@@ -741,8 +1175,414 @@ def bst_delete_route():
     except:
         return jsonify({"ok": False})
 
-    bst_root = bst_delete(bst_root, num)
-    return jsonify({"ok": True, "svg": render_generic_tree_svg(bst_root)})
+    bst_root, detached = bst_detach(bst_root, num)
+    response = {"ok": True, "svg": render_generic_tree_svg(bst_root)}
+    if detached:
+        # store detached subtree server-side so it can be reattached by token
+        token = uuid.uuid4().hex
+        pending_subtrees[token] = ('bst', detached)
+        response["detached_svg"] = render_generic_tree_svg(detached)
+        response["detached_root"] = detached.val
+        response["token"] = token
+    return jsonify(response)
+
+
+# ----------------------
+# Graph endpoints
+# ----------------------
+@app.route('/graph/svg')
+def graph_svg():
+    return jsonify({"ok": True, "svg": render_graph_svg()})
+
+
+def render_graph_svg():
+    # simple circular layout
+    if not graph_vertices:
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" width="800" height="400"></svg>'
+    width = 800
+    height = 400
+    cx = width // 2
+    cy = height // 2
+    r = min(cx, cy) - 80
+    n = len(graph_vertices)
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
+    coords = {}
+    for i, v in enumerate(graph_vertices):
+        angle = 2 * 3.14159 * i / max(1, n)
+        x = int(cx + r * (0.9 * __import__('math').cos(angle)))
+        y = int(cy + r * (0.9 * __import__('math').sin(angle)))
+        coords[v['id']] = (x, y)
+
+    # draw edges
+    for (u, v), w in graph_edges.items():
+        if u not in coords or v not in coords: continue
+        x1, y1 = coords[u]
+        x2, y2 = coords[v]
+        parts.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#fff" stroke-width="{1 + (w-1)}"/>')
+        if w > 1:
+            parts.append(f'<text x="{(x1+x2)//2}" y="{(y1+y2)//2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+
+    # draw vertices
+    for v in graph_vertices:
+        x, y = coords[v['id']]
+        parts.append(f'<circle cx="{x}" cy="{y}" r="20" fill="#7bd389" stroke="#fff" data-id="{v["id"]}" data-val="{escape_text(v.get("label",""))}"/>')
+        parts.append(f'<text x="{x}" y="{y+6}" text-anchor="middle" font-size="14" fill="#000">{escape_text(v.get("label",""))}</text>')
+
+    parts.append('</svg>')
+    return ''.join(parts)
+
+
+@app.route('/graph/add-vertex', methods=['POST'])
+def graph_add_vertex():
+    label = (request.json.get('label') or '').strip()
+    if not label:
+        return jsonify({'ok': False})
+    vid = uuid.uuid4().hex
+    graph_vertices.append({'id': vid, 'label': label})
+    return jsonify({'ok': True, 'svg': render_graph_svg(), 'id': vid})
+
+
+@app.route('/graph/delete-vertex', methods=['POST'])
+def graph_delete_vertex():
+    vid = request.json.get('id')
+    if not vid: return jsonify({'ok': False})
+    global graph_vertices, graph_edges
+    graph_vertices[:] = [v for v in graph_vertices if v['id'] != vid]
+    # remove edges touching vid
+    keys = [k for k in graph_edges.keys()]
+    for k in keys:
+        if vid in k:
+            graph_edges.pop(k, None)
+    return jsonify({'ok': True, 'svg': render_graph_svg()})
+
+
+@app.route('/graph/add-edge', methods=['POST'])
+def graph_add_edge():
+    u = request.json.get('u')
+    v = request.json.get('v')
+    directed = request.json.get('directed', False)
+    if not u or not v: return jsonify({'ok': False})
+    # collapse parallel edges by increasing weight
+    graph_edges[(u, v)] = graph_edges.get((u, v), 0) + 1
+    if not directed:
+        graph_edges[(v, u)] = graph_edges.get((v, u), 0) + 1
+    return jsonify({'ok': True, 'svg': render_graph_svg()})
+
+
+@app.route('/graph/set-weight', methods=['POST'])
+def graph_set_weight():
+    u = request.json.get('u')
+    v = request.json.get('v')
+    w = int(request.json.get('weight') or 1)
+    if not u or not v: return jsonify({'ok': False})
+    graph_edges[(u, v)] = w
+    return jsonify({'ok': True, 'svg': render_graph_svg()})
+
+
+@app.route('/graph/reset', methods=['POST'])
+def graph_reset():
+    graph_vertices.clear()
+    graph_edges.clear()
+    return jsonify({'ok': True, 'svg': render_graph_svg()})
+
+
+@app.route('/tree/delete', methods=['POST'])
+def tree_delete_route():
+    global tree_roots
+    node_id = request.json.get('id')
+    if not node_id:
+        return jsonify({'ok': False})
+
+    def detach_by_id(root, target_id):
+        if not root:
+            return root, None
+        if getattr(root, 'id', None) == target_id:
+            return None, root
+        if root.left:
+            new_left, detached = detach_by_id(root.left, target_id)
+            root.left = new_left
+            if detached:
+                return root, detached
+        if root.right:
+            new_right, detached = detach_by_id(root.right, target_id)
+            root.right = new_right
+            if detached:
+                return root, detached
+        return root, None
+
+    detached = None
+    new_roots = []
+    for r in tree_roots:
+        nr, d = detach_by_id(r, node_id)
+        if d and getattr(r, 'id', None) == node_id:
+            # root itself was detached; promote nothing (children handled by client)
+            detached = d
+            # skip adding this root
+            continue
+        if d:
+            detached = d
+        new_roots.append(nr)
+
+    tree_roots[:] = [r for r in new_roots if r]
+    # promote detached children to be new roots (each becomes its own tree)
+    if detached:
+        # for n-ary children use .children; fallback to left/right
+        kids = []
+        if getattr(detached, 'children', None):
+            kids = [c for c in detached.children if c]
+        else:
+            if detached.left: kids.append(detached.left)
+            if detached.right: kids.append(detached.right)
+
+        for k in kids:
+            tree_roots.append(k)
+
+    resp = {'ok': True, 'svg': render_tree_forest_svg(tree_roots)}
+    if detached:
+        token = uuid.uuid4().hex
+        pending_subtrees[token] = ('tree', detached)
+        resp['detached_svg'] = render_tree_forest_svg([detached])
+        resp['detached_root_id'] = getattr(detached, 'id', None)
+        resp['token'] = token
+    return jsonify(resp)
+
+
+@app.route('/tree/reset', methods=['POST'])
+def tree_reset():
+    global tree_roots
+    tree_roots.clear()
+    return jsonify({"ok": True, "svg": render_tree_forest_svg(tree_roots)})
+@app.route('/bt/delete', methods=['POST'])
+def bt_delete_route():
+    global bt_roots
+    node_id = request.json.get('id')
+    if not node_id:
+        return jsonify({'ok': False})
+
+    def detach_by_id(root, target_id):
+        if not root:
+            return root, None
+        if getattr(root, 'id', None) == target_id:
+            return None, root
+        if root.left:
+            new_left, detached = detach_by_id(root.left, target_id)
+            root.left = new_left
+            if detached:
+                return root, detached
+        if root.right:
+            new_right, detached = detach_by_id(root.right, target_id)
+            root.right = new_right
+            if detached:
+                return root, detached
+        return root, None
+
+    detached = None
+    new_roots = []
+    for r in bt_roots:
+        nr, d = detach_by_id(r, node_id)
+        if d and getattr(r, 'id', None) == node_id:
+            detached = d
+            continue
+        if d:
+            detached = d
+        new_roots.append(nr)
+
+    bt_roots[:] = [r for r in new_roots if r]
+    # promote detached children to be roots
+    if detached:
+        kids = []
+        if getattr(detached, 'children', None):
+            kids = [c for c in detached.children if c]
+        else:
+            if detached.left: kids.append(detached.left)
+            if detached.right: kids.append(detached.right)
+        for k in kids:
+            bt_roots.append(k)
+
+    resp = {'ok': True, 'svg': render_bt_forest_svg(bt_roots)}
+    if detached:
+        token = uuid.uuid4().hex
+        pending_subtrees[token] = ('bt', detached)
+        resp['detached_svg'] = render_bt_forest_svg([detached])
+        resp['detached_root_id'] = getattr(detached, 'id', None)
+        resp['token'] = token
+    return jsonify(resp)
+
+
+@app.route('/reattach/<token>', methods=['POST'])
+def reattach_subtree(token):
+    global tree_root, bt_root, bst_root
+    payload = request.get_json() or {}
+    parent = payload.get('parent')
+
+    item = pending_subtrees.pop(token, None)
+    if not item:
+        return jsonify({'ok': False, 'error': 'token_not_found'}), 404
+
+    typ, node = item
+    # helper to find node by id
+    def find_by_id(root, tid):
+        q = [root]
+        while q:
+            n = q.pop(0)
+            if not n:
+                continue
+            if getattr(n, 'id', None) == tid:
+                return n
+            if getattr(n, 'left', None): q.append(n.left)
+            if getattr(n, 'right', None): q.append(n.right)
+        return None
+
+    if typ == 'bst':
+        # reinsert all values from detached subtree into bst_root
+        def collect_vals(n, out):
+            if not n: return
+            out.append(n.val)
+            collect_vals(n.left, out)
+            collect_vals(n.right, out)
+        vals = []
+        collect_vals(node, vals)
+        for v in vals:
+            bst_root = bst_insert(bst_root, v)
+        return jsonify({'ok': True, 'svg': render_generic_tree_svg(bst_root)})
+
+    if typ == 'tree':
+        # find parent across all tree roots
+        def find_in_roots(roots, tid):
+            for r in roots:
+                q = [r]
+                while q:
+                    n = q.pop(0)
+                    if not n:
+                        continue
+                    if getattr(n, 'id', None) == tid or str(n.val) == str(tid):
+                        return n
+                    # traverse both n.children (n-ary) and legacy left/right
+                    if getattr(n, 'children', None):
+                        q.extend([c for c in n.children if c])
+                    else:
+                        if n.left: q.append(n.left)
+                        if n.right: q.append(n.right)
+            return None
+
+        if parent:
+            p = find_in_roots(tree_roots, parent)
+            if not p:
+                return jsonify({'ok': False, 'error': 'parent_not_found'}), 404
+            # attach under n-ary children if supported
+            if getattr(p, 'children', None) is not None:
+                p.children.append(node)
+            else:
+                if not p.left:
+                    p.left = node
+                elif not p.right:
+                    p.right = node
+                else:
+                    q = [p.left, p.right]
+                    placed = False
+                    while q and not placed:
+                        n = q.pop(0)
+                        if not n.left:
+                            n.left = node; placed = True; break
+                        if not n.right:
+                            n.right = node; placed = True; break
+                        q.extend([n.left, n.right])
+            # ensure edge_weights entries exist for any edges in the reattached subtree
+            try:
+                def collect_edges(n):
+                    res = []
+                    if not n: return res
+                    if getattr(n, 'children', None):
+                        for c in n.children:
+                            res.append((getattr(n,'id',''), getattr(c,'id','')))
+                            res.extend(collect_edges(c))
+                    else:
+                        if n.left:
+                            res.append((getattr(n,'id',''), getattr(n.left,'id','')))
+                            res.extend(collect_edges(n.left))
+                        if n.right:
+                            res.append((getattr(n,'id',''), getattr(n.right,'id','')))
+                            res.extend(collect_edges(n.right))
+                    return res
+                for u,v in collect_edges(node):
+                    if (u,v) not in edge_weights:
+                        edge_weights[(u,v)] = 1
+            except Exception:
+                pass
+            return jsonify({'ok': True, 'svg': render_tree_forest_svg(tree_roots)})
+        else:
+            # no parent -> create a new root (support multiple trees)
+            tree_roots.append(node)
+            return jsonify({'ok': True, 'svg': render_tree_forest_svg(tree_roots)})
+
+    if typ == 'bt':
+        def find_in_roots(roots, tid):
+            for r in roots:
+                q = [r]
+                while q:
+                    n = q.pop(0)
+                    if not n:
+                        continue
+                    if getattr(n, 'id', None) == tid or str(n.val) == str(tid):
+                        return n
+                    if getattr(n, 'children', None):
+                        q.extend([c for c in n.children if c])
+                    else:
+                        if n.left: q.append(n.left)
+                        if n.right: q.append(n.right)
+            return None
+
+        if parent:
+            p = find_in_roots(bt_roots, parent)
+            if not p:
+                return jsonify({'ok': False, 'error': 'parent_not_found'}), 404
+            # attach respecting n-ary children if present
+            if getattr(p, 'children', None) is not None:
+                p.children.append(node)
+            else:
+                if not p.left:
+                    p.left = node
+                elif not p.right:
+                    p.right = node
+                else:
+                    q = [p.left, p.right]
+                    placed = False
+                    while q and not placed:
+                        n = q.pop(0)
+                        if not n.left:
+                            n.left = node; placed = True; break
+                        if not n.right:
+                            n.right = node; placed = True; break
+                        q.extend([n.left, n.right])
+            # if the detached subtree contains children, transfer any edge_weights entries into graph edge_weights keyed by ids
+            try:
+                def collect_edges(n):
+                    res = []
+                    if not n: return res
+                    if getattr(n, 'children', None):
+                        for c in n.children:
+                            res.append((getattr(n,'id',''), getattr(c,'id','')))
+                            res.extend(collect_edges(c))
+                    else:
+                        if n.left:
+                            res.append((getattr(n,'id',''), getattr(n.left,'id','')))
+                            res.extend(collect_edges(n.left))
+                        if n.right:
+                            res.append((getattr(n,'id',''), getattr(n.right,'id','')))
+                            res.extend(collect_edges(n.right))
+                    return res
+                for u,v in collect_edges(node):
+                    if (u,v) not in edge_weights:
+                        edge_weights[(u,v)] = 1
+            except Exception:
+                pass
+            return jsonify({'ok': True, 'svg': render_bt_forest_svg(bt_roots)})
+        else:
+            # no parent -> add as new root
+            bt_roots.append(node)
+            return jsonify({'ok': True, 'svg': render_bt_forest_svg(bt_roots)})
+
+    return jsonify({'ok': False, 'error': 'unknown_type'}), 400
 
 # RUN
 if __name__ == "__main__":

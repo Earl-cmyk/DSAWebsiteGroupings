@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block styles %}
 <style>
-    #bg-grid {
+  #bg-grid {
     position: fixed;
     top: 50%;
     left: 50%;
@@ -12,14 +12,25 @@
   }
 
   .grid-cell {
-    width: 65px;
-    height: 65px;
+    width: 60px;
+    height: 60px;
     background: #0a1a3a;
-    transition: background 0.12s linear;
+    transition: background 0.12s linear, box-shadow 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+    box-sizing: border-box;
+    border: 2px solid rgba(255,255,255,0.06);
+    opacity: 1;
+  }
+
+  .grid-cell:hover {
+    border-color: rgba(255,255,255,0.12);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    transform: translateY(-2px);
   }
 
   .grid-cell.active {
     background: #1e90ff;
+    border-color: rgba(30,144,255,0.9);
+    box-shadow: 0 0 14px rgba(30,144,255,0.35), inset 0 0 6px rgba(255,255,255,0.04);
   }
 
   @keyframes cellPulse {
@@ -93,11 +104,14 @@
       <input id="tree-input" type="text" placeholder="Node value…" />
       <button id="tree-add-root">Add Root</button>
       <button id="tree-add-child">Add Child</button>
+      <button id="tree-reset">Reset</button>
+      <button id="tree-delete-node">Delete Node</button>
     </div>
 
     <div id="tree-display" style="padding:10px;border:1px solid #ccc;">
       <svg id="tree-svg" width="1000" height="600"></svg>
     </div>
+    <div id="tree-detached" style="margin-top:8px;"></div>
   </article>
 
   <!-- BINARY TREE DEMO -->
@@ -110,13 +124,16 @@
     <div style="margin:10px 0;">
       <input id="bt-input" type="text" placeholder="Value…" />
       <button id="bt-add-left">Add Left</button>
+      <button id="bt-add-root">Add Root</button>
       <button id="bt-add-right">Add Right</button>
       <button id="bt-reset">Reset</button>
+      <button id="bt-delete-node">Delete Node</button>
     </div>
 
     <div id="bt-display" style="padding:10px;border:1px solid #ccc;">
       <svg id="bt-svg" width="1000" height="600"></svg>
     </div>
+    <div id="bt-detached" style="margin-top:8px;"></div>
   </article>
 
   <!-- BST DEMO -->
@@ -142,6 +159,33 @@
     <div id="bst-display" style="padding:10px;border:1px solid #ccc;">
       <svg id="bst-svg" width="1000" height="600"></svg>
     </div>
+    <div id="bst-detached" style="margin-top:8px;"></div>
+  </article>
+
+  <!-- GRAPH DEMO -->
+  <article class="post-card">
+    <header>
+      <h3 class="post-title">Graph Demo</h3>
+      <p class="post-caption">Directed / Undirected graph with weighted edges (parallel edges collapse into weight).</p>
+    </header>
+
+    <div style="margin:10px 0;display:flex;gap:.5rem;flex-wrap:wrap;">
+      <input id="graph-vertex-label" type="text" placeholder="Vertex label…" />
+      <button id="graph-add-vertex">Add Vertex</button>
+      <input id="graph-delete-vertex-id" type="text" placeholder="Vertex id to delete…" />
+      <button id="graph-delete-vertex">Delete Vertex</button>
+      <input id="graph-edge-u" type="text" placeholder="From id…" />
+      <input id="graph-edge-v" type="text" placeholder="To id…" />
+      <label><input type="checkbox" id="graph-directed" /> Directed</label>
+      <button id="graph-add-edge">Add Edge (collapse -> weight)</button>
+      <input id="graph-weight" type="number" placeholder="Weight…" style="width:80px;" />
+      <button id="graph-set-weight">Set Weight</button>
+      <button id="graph-reset">Reset</button>
+    </div>
+
+    <div id="graph-display" style="padding:10px;border:1px solid #ccc;margin-top:8px;">
+      <svg id="graph-svg" width="800" height="400"></svg>
+    </div>
   </article>
 
   <!-- ========================= -->
@@ -161,12 +205,34 @@
           <p class="post-caption preserve">{{ post.caption }}</p>
         </header>
         <div class="post-meta" style="margin-top:8px;color:var(--muted);font-size:0.9rem;">
-          <strong>Max Value:</strong> {{ post.max_value }} &nbsp; • &nbsp;
           <strong>Related Topics:</strong> {{ post.related_count }}
         </div>
+            {% if post.latest_comment %}
+            <div class="post-meta" style="margin-top:6px;color:var(--muted);font-size:0.9rem;">
+              <strong>Latest Comment:</strong> <span class="preserve">{{ post.latest_comment }}</span>
+            </div>
+            {% endif %}
+            <div class="comments">
+              <div class="comments-list" id="comments-{{ post.id }}"></div>
+              <textarea id="comment-input-{{ post.id }}" placeholder="Add a comment…" rows="2"></textarea>
+              <div style="margin-top:6px;display:flex;gap:.5rem;">
+                <button class="btn btn-primary" onclick="submitComment({{ post.id }})">Comment</button>
+                <button class="btn" onclick="loadComments({{ post.id }})">Load All</button>
+              </div>
+            </div>
         <footer>
           <button class="vote-up" data-id="{{ post.id }}">▲ <span class="count">{{ post.up }}</span></button>
           <button class="vote-down" data-id="{{ post.id }}">▼ <span class="count">{{ post.down }}</span></button>
+          {% if post.attachments and post.attachments|length > 0 %}
+            <div class="attachments" style="margin-top:6px;">
+              <strong>Attachments:</strong>
+              <ul>
+                {% for a in post.attachments %}
+                  <li><a href="/{{ a.url }}" target="_blank">{{ a.filename }}</a></li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
         </footer>
       </article>
     {% endif %}
@@ -182,7 +248,7 @@
   <div class="modal-content">
     <h2 id="modal-title">Create a Post</h2>
 
-    <form id="post-form" method="POST" action="{{ url_for('create_post') }}">
+    <form id="post-form" method="POST" enctype="multipart/form-data" action="{{ url_for('create_post') }}">
       <input type="hidden" id="post-id" name="id" value="">
 
       <label>Title:</label>
@@ -198,6 +264,9 @@
       <select name="post_type">
         <option value="regular">Regular</option>
       </select>
+
+      <label>Attachments:</label>
+      <input type="file" id="post-attachments" name="attachments" multiple />
 
       <div style="margin-top:10px;">
         <button type="submit" class="btn btn-primary">Save</button>
@@ -300,6 +369,8 @@ function insertSVG(container, svgString) {
       svg.removeAttribute('width');
       svg.removeAttribute('height');
       container.appendChild(svg);
+      // attach click handlers for nodes (if any)
+      try { attachSVGNodeClicks(container); } catch(e) {}
     } else {
       // fallback to raw HTML insertion
       container.innerHTML = svgString;
@@ -307,6 +378,50 @@ function insertSVG(container, svgString) {
   } catch (e) {
     container.innerHTML = svgString;
   }
+}
+
+// selection state for demos
+let selectedTree = null;
+let selectedBT = null;
+let selectedBST = null;
+
+function clearHighlights(container) {
+  const svgs = container.querySelectorAll('svg');
+  svgs.forEach(svg => {
+    svg.querySelectorAll('circle').forEach(c => c.style.stroke = '');
+  });
+}
+
+function attachSVGNodeClicks(container) {
+  if (!container) return;
+  const svg = container.querySelector('svg');
+  if (!svg) return;
+  svg.querySelectorAll('circle[data-id]').forEach(circle => {
+    circle.style.cursor = 'pointer';
+    circle.addEventListener('click', (e) => {
+      const id = circle.getAttribute('data-id');
+      const val = circle.getAttribute('data-val');
+      // determine which demo by container id
+      const cid = container.id || '';
+      // clear previous highlights in this container
+      svg.querySelectorAll('circle').forEach(c => c.style.stroke = '');
+      circle.style.stroke = '#ffd54f';
+      circle.style.strokeWidth = '4px';
+
+      if (cid.includes('tree')) {
+        selectedTree = id;
+        const inp = document.getElementById('tree-input'); if (inp) inp.value = val;
+      }
+      else if (cid.includes('bt')) {
+        selectedBT = id;
+        const inp = document.getElementById('bt-input'); if (inp) inp.value = val;
+      }
+      else if (cid.includes('bst')) {
+        selectedBST = id;
+        const inp = document.getElementById('bst-input'); if (inp) inp.value = val;
+      }
+    });
+  });
 }
 
     /* ============================= */
@@ -360,7 +475,6 @@ document.getElementById("stack-pop").onclick = async () => {
 /* ============================= */
 document.getElementById("tree-add-root").onclick = async () => {
   const val = document.getElementById("tree-input").value;
-
   const res = await fetch("/tree/insert", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -371,8 +485,24 @@ document.getElementById("tree-add-root").onclick = async () => {
   if (data.svg) insertSVG(document.getElementById("tree-display"), data.svg);
 };
 
-document.getElementById("tree-add-child").onclick =
-document.getElementById("tree-add-root").onclick;
+// Add child to selected node (requires clicking a node first)
+document.getElementById("tree-add-child").onclick = async () => {
+  const val = document.getElementById("tree-input").value;
+  const parent = selectedTree;
+  const res = await fetch("/tree/insert", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ value: val, parent: parent })
+  });
+  const data = await res.json();
+  if (data.svg) insertSVG(document.getElementById("tree-display"), data.svg);
+};
+
+document.getElementById("tree-reset").onclick = async () => {
+  const res = await fetch("/tree/reset", { method: "POST" });
+  const data = await res.json();
+  if (data.svg) insertSVG(document.getElementById("tree-display"), data.svg);
+};
 
 
 /* ============================= */
@@ -380,11 +510,11 @@ document.getElementById("tree-add-root").onclick;
 /* ============================= */
 document.getElementById("bt-add-left").onclick = async () => {
   const val = document.getElementById("bt-input").value;
-
+  const parent = selectedBT;
   const res = await fetch("/bt/add-left", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ value: val })
+    body: JSON.stringify({ value: val, parent: parent })
   });
 
   const data = await res.json();
@@ -393,13 +523,24 @@ document.getElementById("bt-add-left").onclick = async () => {
 
 document.getElementById("bt-add-right").onclick = async () => {
   const val = document.getElementById("bt-input").value;
-
+  const parent = selectedBT;
   const res = await fetch("/bt/add-right", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ value: val, parent: parent })
+  });
+
+  const data = await res.json();
+  if (data.svg) insertSVG(document.getElementById("bt-display"), data.svg);
+};
+
+document.getElementById("bt-add-root").onclick = async () => {
+  const val = document.getElementById("bt-input").value;
+  const res = await fetch("/bt/add-root", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({ value: val })
   });
-
   const data = await res.json();
   if (data.svg) insertSVG(document.getElementById("bt-display"), data.svg);
 };
@@ -442,6 +583,96 @@ document.getElementById("bst-reset").onclick = () => {
 
   const data = await res.json();
   if (data.svg) insertSVG(document.getElementById("bst-display"), data.svg);
+  const detachedContainer = document.getElementById('bst-detached');
+  detachedContainer.innerHTML = '';
+  if (data.detached_svg) {
+    const header = document.createElement('div');
+    header.style.marginBottom = '6px';
+    header.innerHTML = `<strong>Detached subtree (root: ${data.detached_root})</strong> <button class="btn" id="reinsert-detached">Reinsert root</button>`;
+    detachedContainer.appendChild(header);
+    const svgWrap = document.createElement('div');
+    svgWrap.style.border = '1px dashed rgba(255,255,255,0.06)';
+    svgWrap.style.padding = '6px';
+    svgWrap.innerHTML = data.detached_svg;
+    detachedContainer.appendChild(svgWrap);
+    // reattach using server-side stored subtree token
+    document.getElementById('reinsert-detached').addEventListener('click', async () => {
+      const token = data.token;
+      if (!token) return;
+      const res = await fetch(`/reattach/${token}`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) });
+      const d = await res.json();
+      if (d.svg) insertSVG(document.getElementById('bst-display'), d.svg);
+      detachedContainer.innerHTML = '';
+    });
+    try { attachSVGNodeClicks(svgWrap); } catch(e) {}
+  }
+};
+
+// Tree delete (delete selected node)
+document.getElementById('tree-delete-node').onclick = async () => {
+  if (!selectedTree) { alert('Select a node first'); return; }
+  const res = await fetch('/tree/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ id: selectedTree })
+  });
+  const data = await res.json();
+  if (data.svg) insertSVG(document.getElementById('tree-display'), data.svg);
+  const container = document.getElementById('tree-detached');
+  container.innerHTML = '';
+  if (data.detached_svg) {
+    const header = document.createElement('div');
+    header.style.marginBottom = '6px';
+    header.innerHTML = `<strong>Detached subtree</strong> <button class="btn" id="tree-reinsert">Reinsert root</button>`;
+    container.appendChild(header);
+    const svgWrap = document.createElement('div');
+    svgWrap.style.border = '1px dashed rgba(255,255,255,0.06)';
+    svgWrap.style.padding = '6px';
+    svgWrap.innerHTML = data.detached_svg;
+    container.appendChild(svgWrap);
+    document.getElementById('tree-reinsert').addEventListener('click', async () => {
+      const token = data.token;
+      if (!token) return;
+      // attach under selectedTree if available
+      const payload = {};
+      if (selectedTree) payload.parent = selectedTree;
+      const r = await fetch(`/reattach/${token}`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      const d = await r.json();
+      if (d.svg) insertSVG(document.getElementById('tree-display'), d.svg);
+    });
+    try { attachSVGNodeClicks(svgWrap); } catch(e) {}
+  }
+};
+
+// BT delete (delete selected node)
+document.getElementById('bt-delete-node').onclick = async () => {
+  if (!selectedBT) { alert('Select a node first'); return; }
+  const res = await fetch('/bt/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ id: selectedBT })
+  });
+  const data = await res.json();
+  if (data.svg) insertSVG(document.getElementById('bt-display'), data.svg);
+  const container = document.getElementById('bt-detached');
+  container.innerHTML = '';
+  if (data.detached_svg) {
+    const header = document.createElement('div');
+    header.style.marginBottom = '6px';
+    header.innerHTML = `<strong>Detached subtree</strong> <button class="btn" id="bt-reinsert">Reinsert root</button>`;
+    container.appendChild(header);
+    const svgWrap = document.createElement('div');
+    svgWrap.style.border = '1px dashed rgba(255,255,255,0.06)';
+    svgWrap.style.padding = '6px';
+    svgWrap.innerHTML = data.detached_svg;
+    container.appendChild(svgWrap);
+    document.getElementById('bt-reinsert').addEventListener('click', async () => {
+      const token = data.token;
+      if (!token) return;
+      const payload = {};
+      if (selectedBT) payload.parent = selectedBT;
+      const r = await fetch(`/reattach/${token}`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      const d = await r.json();
+      if (d.svg) insertSVG(document.getElementById('bt-display'), d.svg);
+    });
+    try { attachSVGNodeClicks(svgWrap); } catch(e) {}
+  }
 };
 
 
@@ -474,6 +705,159 @@ document.getElementById("bst-height").onclick = async () => {
   document.getElementById("bst-info").innerText =
     "Tree Height: " + data.height;
 };
+
+/* ---------------------------- */
+/* GRAPH DEMO JS                */
+/* ---------------------------- */
+document.getElementById('graph-add-vertex').onclick = async () => {
+  const label = document.getElementById('graph-vertex-label').value;
+  const res = await fetch('/graph/add-vertex', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({label}) });
+  const d = await res.json(); if (d.svg) insertSVG(document.getElementById('graph-display'), d.svg);
+};
+
+document.getElementById('graph-delete-vertex').onclick = async () => {
+  const id = document.getElementById('graph-delete-vertex-id').value;
+  const res = await fetch('/graph/delete-vertex', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({id}) });
+  const d = await res.json(); if (d.svg) insertSVG(document.getElementById('graph-display'), d.svg);
+};
+
+document.getElementById('graph-add-edge').onclick = async () => {
+  const u = document.getElementById('graph-edge-u').value;
+  const v = document.getElementById('graph-edge-v').value;
+  const directed = document.getElementById('graph-directed').checked;
+  const res = await fetch('/graph/add-edge', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({u,v,directed}) });
+  const d = await res.json(); if (d.svg) insertSVG(document.getElementById('graph-display'), d.svg);
+};
+
+document.getElementById('graph-set-weight').onclick = async () => {
+  const u = document.getElementById('graph-edge-u').value;
+  const v = document.getElementById('graph-edge-v').value;
+  const weight = parseInt(document.getElementById('graph-weight').value || '1');
+  const res = await fetch('/graph/set-weight', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({u,v,weight}) });
+  const d = await res.json(); if (d.svg) insertSVG(document.getElementById('graph-display'), d.svg);
+};
+
+document.getElementById('graph-reset').onclick = async () => {
+  const res = await fetch('/graph/reset', { method: 'POST' });
+  const d = await res.json(); if (d.svg) insertSVG(document.getElementById('graph-display'), d.svg);
+};
+
+// load initial graph svg on page load
+window.addEventListener('DOMContentLoaded', async () => {
+  try { const res = await fetch('/graph/svg'); const d = await res.json(); if (d.svg) insertSVG(document.getElementById('graph-display'), d.svg); } catch(e){}
+});
+
+/* ----------------------------- */
+/* Comments helpers             */
+/* ----------------------------- */
+async function submitComment(postId, parentId=null) {
+  const ta = document.getElementById(`comment-input-${postId}`);
+  if (!ta) return;
+  const text = ta.value; // preserve whitespace
+  if (!text) return;
+  const res = await fetch('/comments/add', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ post_id: postId, comment: text, parent_id: parentId })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    ta.value = '';
+    // append latest comment snippet
+    const list = document.getElementById(`comments-${postId}`);
+    if (list) {
+      const el = document.createElement('div');
+      el.className = 'preserve';
+      el.style.padding = '6px 0';
+      el.innerText = data.comment.comment;
+      list.prepend(el);
+    }
+  }
+}
+
+async function loadComments(postId) {
+  const res = await fetch(`/posts/${postId}/comments`);
+  const data = await res.json();
+  const list = document.getElementById(`comments-${postId}`);
+  if (!list) return;
+  list.innerHTML = '';
+  data.forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'preserve';
+    el.style.padding = '6px 0';
+    el.innerText = c.comment;
+    list.appendChild(el);
+  });
+}
+
+// -----------------------------
+// Delete + snackbar helpers
+// -----------------------------
+let pendingDeleteId = null;
+let pendingDeleteTimeout = null;
+
+async function deletePost(id) {
+  // schedule server-side delete (5s) and show snackbar with cancel option
+  pendingDeleteId = id;
+  try {
+    await fetch(`/delete/${id}`, { method: 'POST' });
+  } catch (e) {
+    // still show snackbar so user can retry
+  }
+
+  const snackbar = document.getElementById('snackbar');
+  snackbar.style.display = 'flex';
+
+  // clear any previous timeout
+  if (pendingDeleteTimeout) clearTimeout(pendingDeleteTimeout);
+
+  // After 5s hide snackbar and remove the post card from DOM (assume deletion occurred)
+  pendingDeleteTimeout = setTimeout(() => {
+    snackbar.style.display = 'none';
+    const card = document.querySelector(`.post-card[data-id="${id}"]`);
+    if (card) card.remove();
+    pendingDeleteId = null;
+    pendingDeleteTimeout = null;
+  }, 5000);
+}
+
+// Vote handlers (delegated)
+document.addEventListener('click', async (e) => {
+  const up = e.target.closest('.vote-up');
+  const down = e.target.closest('.vote-down');
+  if (!up && !down) return;
+  e.preventDefault();
+  const btn = up || down;
+  const id = btn.dataset.id;
+  const way = up ? 'up' : 'down';
+  try {
+    const res = await fetch(`/vote/${id}/${way}`, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      btn.querySelector('.count').innerText = way === 'up' ? data.up : data.down;
+    }
+  } catch (err) {
+    console.error(err);
+  }
+});
+
+function cancelDelete() {
+  if (!pendingDeleteId) return;
+  const id = pendingDeleteId;
+  // cancel server-side scheduled delete
+  fetch(`/delete/cancel/${id}`, { method: 'POST' }).then(() => {
+    const snackbar = document.getElementById('snackbar');
+    snackbar.style.display = 'none';
+    if (pendingDeleteTimeout) { clearTimeout(pendingDeleteTimeout); pendingDeleteTimeout = null; }
+    pendingDeleteId = null;
+  }).catch(() => {
+    // hide anyway
+    const snackbar = document.getElementById('snackbar');
+    snackbar.style.display = 'none';
+    if (pendingDeleteTimeout) { clearTimeout(pendingDeleteTimeout); pendingDeleteTimeout = null; }
+    pendingDeleteId = null;
+  });
+}
 
 // GRID BACKGROUND EFFECT
 document.addEventListener("DOMContentLoaded", () => {
@@ -525,6 +909,20 @@ document.addEventListener("DOMContentLoaded", () => {
     ({ cols, rows, cells } = createGrid());
   });
 });
+
+document.getElementById("bst-max").onclick = async () => {
+  const res = await fetch("/bst/max");
+  const data = await res.json();
+  document.getElementById("bst-info").innerText =
+    "Max Value: " + data.max;
+};
+
+document.getElementById("bst-height").onclick = async () => {
+  const res = await fetch("/bst/height");
+  const data = await res.json();
+  document.getElementById("bst-info").innerText =
+    "Tree Height: " + data.height;
+};
 </script>
 
 {% endblock %}
