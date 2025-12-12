@@ -1,13 +1,136 @@
-from flask import Flask, request, render_template, redirect, url_for, g, jsonify
+from flask import Flask, request, render_template, redirect, url_for, g, jsonify, session
 import sqlite3
 import os
 import threading
 import time
 import uuid
 from markupsafe import escape
+from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
 
 app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 DATABASE = "feed.db"
+
+# -------------------------
+# OOP USER AUTHENTICATION
+# -------------------------
+class User:
+    """User model with authentication support."""
+    def __init__(self, id=None, username=None, email=None, oauth_provider=None, oauth_id=None):
+        self.id = id
+        self.username = username
+        self.email = email
+        self.oauth_provider = oauth_provider
+        self.oauth_id = oauth_id
+
+    @staticmethod
+    def create_local(db, username, email, password):
+        """Create a new local user with hashed password."""
+        try:
+            hashed_pwd = generate_password_hash(password)
+            cursor = db.cursor()
+            cursor.execute(
+                "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
+                (username, email, hashed_pwd)
+            )
+            db.commit()
+            return User(id=cursor.lastrowid, username=username, email=email)
+        except sqlite3.IntegrityError:
+            return None  # User already exists
+
+    @staticmethod
+    def create_oauth(db, oauth_provider, oauth_id, username, email):
+        """Create or get OAuth user."""
+        cursor = db.cursor()
+        # Check if OAuth user exists
+        cursor.execute("SELECT id, username, email FROM users WHERE oauth_provider=? AND oauth_id=?",
+                       (oauth_provider, oauth_id))
+        row = cursor.fetchone()
+        if row:
+            return User(id=row[0], username=row[1], email=row[2], oauth_provider=oauth_provider, oauth_id=oauth_id)
+        
+        # Create new OAuth user
+        try:
+            cursor.execute(
+                "INSERT INTO users (username, email, oauth_provider, oauth_id) VALUES (?, ?, ?, ?)",
+                (username, email, oauth_provider, oauth_id)
+            )
+            db.commit()
+            return User(id=cursor.lastrowid, username=username, email=email, oauth_provider=oauth_provider, oauth_id=oauth_id)
+        except sqlite3.IntegrityError:
+            # Username or email conflict; use a unique variant
+            unique_username = f"{oauth_provider}_{uuid.uuid4().hex[:8]}"
+            cursor.execute(
+                "INSERT INTO users (username, email, oauth_provider, oauth_id) VALUES (?, ?, ?, ?)",
+                (unique_username, email, oauth_provider, oauth_id)
+            )
+            db.commit()
+            return User(id=cursor.lastrowid, username=unique_username, email=email, oauth_provider=oauth_provider, oauth_id=oauth_id)
+
+    @staticmethod
+    def authenticate(db, username, password):
+        """Authenticate user by username and password."""
+        cursor = db.cursor()
+        cursor.execute("SELECT id, username, email, password FROM users WHERE username=?", (username,))
+        row = cursor.fetchone()
+        if row and row[3]:  # Check if password exists
+            if check_password_hash(row[3], password):
+                return User(id=row[0], username=row[1], email=row[2])
+        return None
+
+    @staticmethod
+    def get_by_id(db, user_id):
+        """Fetch user by ID."""
+        cursor = db.cursor()
+        cursor.execute("SELECT id, username, email, oauth_provider, oauth_id FROM users WHERE id=?", (user_id,))
+        row = cursor.fetchone()
+        if row:
+            return User(id=row[0], username=row[1], email=row[2], oauth_provider=row[3], oauth_id=row[4])
+        return None
+
+
+class AuthManager:
+    """Manage user sessions and authentication."""
+    @staticmethod
+    def login_user(user):
+        """Store user in session."""
+        session['user_id'] = user.id
+        session['username'] = user.username
+
+    @staticmethod
+    def logout_user():
+        """Clear user session."""
+        session.pop('user_id', None)
+        session.pop('username', None)
+
+    @staticmethod
+    def get_current_user(db):
+        """Get current logged-in user from session."""
+        user_id = session.get('user_id')
+        if user_id:
+            return User.get_by_id(db, user_id)
+        return None
+
+    @staticmethod
+    def is_authenticated():
+        """Check if user is logged in."""
+        return 'user_id' in session
+
+def login_required(f):
+    """Decorator to require login."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not AuthManager.is_authenticated():
+            return redirect(url_for('login_page'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def get_current_user_context():
+    """Get current user for template context."""
+    db = get_db()
+    user = AuthManager.get_current_user(db)
+    return user
 
 # -------------------------
 # SIMPLE NODE / STRUCTURES
@@ -181,21 +304,54 @@ def init_db():
     except Exception:
         pass
 
+    # Migration: ensure posts have user_id column linking to users table
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(posts)")
+        post_cols = [r[1] for r in cur.fetchall()]
+        if 'user_id' not in post_cols:
+            try:
+                cur.execute("ALTER TABLE posts ADD COLUMN user_id INTEGER")
+                # Attempt to backfill user_id from posts.author matching users.username
+                try:
+                    cur.execute("SELECT id, username FROM users")
+                    users = cur.fetchall()
+                    for u in users:
+                        uid = u[0]
+                        uname = u[1]
+                        cur.execute("UPDATE posts SET user_id=? WHERE author=?", (uid, uname))
+                    conn.commit()
+                except Exception:
+                    # best-effort backfill; ignore errors
+                    pass
+            except Exception:
+                # ignore if cannot alter (older sqlite versions)
+                pass
+        conn.close()
+    except Exception:
+        pass
+
 # -------------------------
 # FEED / SEARCH LOGIC
 # -------------------------
 def get_feed_stack():
     db = get_db()
     # return newest-first so front-end loop.first behaves predictably if you prepend interatives
-    rows = db.execute("SELECT * FROM posts ORDER BY id DESC").fetchall()
+    rows = db.execute("""
+        SELECT p.*, u.username FROM posts p
+        LEFT JOIN users u ON p.user_id = u.id
+        ORDER BY p.id DESC
+    """).fetchall()
     stack = Stack()
     for r in rows:
         # convert sqlite Row to regular dict to avoid sqlite Row quirks in templates/JS
         post = {
             "id": r["id"],
+            "user_id": r["user_id"],
             "title": r["title"],
             "caption": r["caption"],
-            "author": r["author"],
+            "author": r["username"] or "Anonymous",
             "post_type": r["post_type"],
             "up": r["up"] if r["up"] is not None else 0,
             "down": r["down"] if r["down"] is not None else 0,
@@ -237,6 +393,87 @@ def perform_bst_search(keyword):
 # -------------------------
 # ROUTES
 # -------------------------
+@app.route("/register", methods=["GET", "POST"])
+def register_page():
+    """User registration page."""
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "").strip()
+        confirm_password = request.form.get("confirm_password", "").strip()
+
+        if not username or not email or not password:
+            return render_template("register.html", error="All fields are required.")
+        
+        if password != confirm_password:
+            return render_template("register.html", error="Passwords do not match.")
+        
+        db = get_db()
+        user = User.create_local(db, username, email, password)
+        
+        if not user:
+            return render_template("register.html", error="Username or email already exists.")
+        
+        # Auto-login after registration
+        AuthManager.login_user(user)
+        return redirect(url_for("lectures"))
+    
+    return render_template("register.html")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login_page():
+    """User login page."""
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "").strip()
+
+        if not username or not password:
+            return render_template("login.html", error="Username and password required.")
+        
+        db = get_db()
+        user = User.authenticate(db, username, password)
+        
+        if not user:
+            return render_template("login.html", error="Invalid username or password.")
+        
+        AuthManager.login_user(user)
+        return redirect(url_for("lectures"))
+    
+    return render_template("login.html")
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    """Logout the current user."""
+    AuthManager.logout_user()
+    return redirect(url_for("login_page"))
+
+
+@app.route("/oauth/github", methods=["GET"])
+def oauth_github_login():
+    """Initiate GitHub OAuth flow (simplified for demo)."""
+    # In production, use a proper OAuth library (authlib, requests-oauthlib)
+    # For now, create a demo OAuth user
+    db = get_db()
+    github_id = request.args.get("code", "github_demo")
+    user = User.create_oauth(db, "github", github_id, f"github_{github_id[:8]}", f"{github_id}@github.local")
+    AuthManager.login_user(user)
+    return redirect(url_for("lectures"))
+
+
+@app.route("/oauth/google", methods=["GET"])
+def oauth_google_login():
+    """Initiate Google OAuth flow (simplified for demo)."""
+    # In production, use a proper OAuth library (authlib, requests-oauthlib)
+    # For now, create a demo OAuth user
+    db = get_db()
+    google_id = request.args.get("code", "google_demo")
+    user = User.create_oauth(db, "google", google_id, f"google_{google_id[:8]}", f"{google_id}@google.local")
+    AuthManager.login_user(user)
+    return redirect(url_for("lectures"))
+
+
 @app.route("/", methods=["GET", "POST"])
 def home():
     if request.method == "POST":
@@ -283,11 +520,9 @@ def home():
                 item['latest_comment'] = None
 
         return jsonify(results)
-
     # default homepage load
     posts = get_feed_stack()
-    return render_template("index.html", posts=posts)
-
+    return render_template("index.html", posts=posts, current_user=get_current_user_context())
 
 @app.route("/search_posts")
 def search_posts():
@@ -420,21 +655,27 @@ def lectures():
             post["max_value"] = post.get("caption") or "None"
             post["related_count"] = 0
 
-    return render_template("lectures.html", posts=final_posts)
+    return render_template("lectures.html", posts=final_posts, current_user=get_current_user_context())
 
 @app.route("/create_post", methods=["POST"])
 def create_post():
+    if not AuthManager.is_authenticated():
+        return jsonify({"ok": False, "error": "login_required"}), 401
+    
     db = get_db()
+    user = AuthManager.get_current_user(db)
+    if not user:
+        return jsonify({"ok": False, "error": "user_not_found"}), 401
+    
     title = request.form.get("title")
     caption = request.form.get("caption")
-    author = request.form.get("author", "Anonymous")
     post_type = request.form.get("post_type", "regular")
 
     cur = db.cursor()
     cur.execute("""
-        INSERT INTO posts(title, caption, author, post_type, up, down)
+        INSERT INTO posts(user_id, title, caption, post_type, up, down)
         VALUES (?, ?, ?, ?, 0, 0)
-    """, (title, caption, author, post_type))
+    """, (user.id, title, caption, post_type))
     db.commit()
     post_id = cur.lastrowid
 
@@ -529,6 +770,18 @@ def perform_delete(post_id):
 @app.route("/delete/<int:id>", methods=["POST"])
 def schedule_delete(id):
     global pending_deletes
+    
+    if not AuthManager.is_authenticated():
+        return jsonify({"ok": False, "error": "login_required"}), 401
+    
+    db = get_db()
+    current_user = AuthManager.get_current_user(db)
+    
+    # Check post ownership
+    post = db.execute("SELECT user_id FROM posts WHERE id=?", (id,)).fetchone()
+    if not post or post[0] != current_user.id:
+        return jsonify({"ok": False, "error": "unauthorized"}), 403
+    
     if id in pending_deletes:
         return jsonify({"ok": True, "pending": True})
 
@@ -550,22 +803,29 @@ def cancel_delete(id):
         return jsonify({"ok": True, "cancelled": True})
     return jsonify({"ok": False, "error": "not_pending"}), 404
 
-# Edit should accept the same form fields used by your modal (title, caption, author)
+# Edit should accept the same form fields used by your modal (title, caption)
 @app.route("/edit/<int:id>", methods=["POST"])
 def edit(id):
-    # Your modal sets the form to post title, caption, author (same names)
+    if not AuthManager.is_authenticated():
+        return jsonify({"ok": False, "error": "login_required"}), 401
+    
+    db = get_db()
+    current_user = AuthManager.get_current_user(db)
+    
+    # Check post ownership
+    post = db.execute("SELECT user_id FROM posts WHERE id=?", (id,)).fetchone()
+    if not post or post[0] != current_user.id:
+        return jsonify({"ok": False, "error": "unauthorized"}), 403
+    
+    # Your modal sets the form to post title, caption (no author field)
     title = request.form.get("title")
     caption = request.form.get("caption")
-    author = request.form.get("author")
 
-    db = get_db()
     # Only update fields that were provided
     if title is not None:
         db.execute("UPDATE posts SET title=? WHERE id=?", (title, id))
     if caption is not None:
         db.execute("UPDATE posts SET caption=? WHERE id=?", (caption, id))
-    if author is not None:
-        db.execute("UPDATE posts SET author=? WHERE id=?", (author, id))
     db.commit()
     return redirect(url_for("lectures"))
 

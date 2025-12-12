@@ -194,15 +194,18 @@
   {% for post in posts %}
     {% if post.id > 0 %}
       <article class="post-card" data-id="{{ post.id }}">
+        {% if current_user and post.user_id == current_user.id %}
         <div class="three-dots" data-id="{{ post.id }}">⋯</div>
         <div class="dropdown-menu" id="menu-{{ post.id }}">
-          <button class="edit-post" data-id="{{ post.id }}" data-title="{{ post.title }}" data-caption="{{ post.caption }}" data-author="{{ post.author }}">✏️ Edit</button>
+          <button class="edit-post" data-id="{{ post.id }}" data-title="{{ post.title }}" data-caption="{{ post.caption }}">✏️ Edit</button>
           <button class="delete-post" onclick="deletePost({{ post.id }})">🗑️ Delete</button>
         </div>
+        {% endif %}
 
         <header>
           <h3 class="post-title">{{ post.title }}</h3>
           <p class="post-caption preserve">{{ post.caption }}</p>
+          <p style="font-size:0.85rem;color:var(--muted);margin:4px 0;">By {{ post.author }}</p>
         </header>
         <div class="post-meta" style="margin-top:8px;color:var(--muted);font-size:0.9rem;">
           <strong>Related Topics:</strong> {{ post.related_count }}
@@ -256,9 +259,6 @@
 
       <label>Caption:</label>
       <textarea id="post-caption-input" name="caption" required></textarea>
-
-      <label>Author:</label>
-      <input type="text" id="post-author-input" name="author" required>
 
       <label>Post Type:</label>
       <select name="post_type">
