@@ -7,16 +7,28 @@ import uuid
 from markupsafe import escape
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
+import markdown, bleach
+
+ALLOWED_TAGS = [
+    "h1","h2","h3","p","strong","em",
+    "ul","li","hr","code","pre","blockquote"
+]
+
+def md_to_safe_html(md):
+    html = markdown.markdown(md or "", extensions=["fenced_code"])
+    return bleach.clean(html, tags=ALLOWED_TAGS, strip=True)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 DATABASE = "feed.db"
+
 
 # -------------------------
 # OOP USER AUTHENTICATION
 # -------------------------
 class User:
     """User model with authentication support."""
+
     def __init__(self, id=None, username=None, email=None, oauth_provider=None, oauth_id=None):
         self.id = id
         self.username = username
@@ -49,7 +61,7 @@ class User:
         row = cursor.fetchone()
         if row:
             return User(id=row[0], username=row[1], email=row[2], oauth_provider=oauth_provider, oauth_id=oauth_id)
-        
+
         # Create new OAuth user
         try:
             cursor.execute(
@@ -57,7 +69,8 @@ class User:
                 (username, email, oauth_provider, oauth_id)
             )
             db.commit()
-            return User(id=cursor.lastrowid, username=username, email=email, oauth_provider=oauth_provider, oauth_id=oauth_id)
+            return User(id=cursor.lastrowid, username=username, email=email, oauth_provider=oauth_provider,
+                        oauth_id=oauth_id)
         except sqlite3.IntegrityError:
             # Username or email conflict; use a unique variant
             unique_username = f"{oauth_provider}_{uuid.uuid4().hex[:8]}"
@@ -66,7 +79,8 @@ class User:
                 (unique_username, email, oauth_provider, oauth_id)
             )
             db.commit()
-            return User(id=cursor.lastrowid, username=unique_username, email=email, oauth_provider=oauth_provider, oauth_id=oauth_id)
+            return User(id=cursor.lastrowid, username=unique_username, email=email, oauth_provider=oauth_provider,
+                        oauth_id=oauth_id)
 
     @staticmethod
     def authenticate(db, username, password):
@@ -92,6 +106,7 @@ class User:
 
 class AuthManager:
     """Manage user sessions and authentication."""
+
     @staticmethod
     def login_user(user):
         """Store user in session."""
@@ -117,20 +132,25 @@ class AuthManager:
         """Check if user is logged in."""
         return 'user_id' in session
 
+
 def login_required(f):
     """Decorator to require login."""
+
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not AuthManager.is_authenticated():
             return redirect(url_for('login_page'))
         return f(*args, **kwargs)
+
     return decorated_function
+
 
 def get_current_user_context():
     """Get current user for template context."""
     db = get_db()
     user = AuthManager.get_current_user(db)
     return user
+
 
 # -------------------------
 # SIMPLE NODE / STRUCTURES
@@ -140,6 +160,7 @@ class Node:
         self.node = data
         self.left = None
         self.right = None
+
 
 class Stack:
     def __init__(self):
@@ -160,8 +181,10 @@ class Stack:
             cur = cur.left
         return items
 
+
 class QueueLinked:
     """Linked-list based queue used only locally in some actions."""
+
     def __init__(self):
         self.head = None
         self.tail = None
@@ -184,6 +207,7 @@ class QueueLinked:
         self.head = self.head.right
         self.length -= 1
         return n.node
+
 
 class BST:
     def __init__(self):
@@ -231,6 +255,7 @@ class BST:
         walk(self.root)
         return results
 
+
 # -------------------------
 # DATABASE HELPERS
 # -------------------------
@@ -241,11 +266,13 @@ def get_db():
         g.db.row_factory = sqlite3.Row
     return g.db
 
+
 @app.teardown_appcontext
 def close_db(exception):
     db = g.pop("db", None)
     if db:
         db.close()
+
 
 def init_db():
     if not os.path.exists(DATABASE):
@@ -332,6 +359,7 @@ def init_db():
     except Exception:
         pass
 
+
 # -------------------------
 # FEED / SEARCH LOGIC
 # -------------------------
@@ -345,20 +373,32 @@ def get_feed_stack():
     """).fetchall()
     stack = Stack()
     for r in rows:
-        # convert sqlite Row to regular dict to avoid sqlite Row quirks in templates/JS
+        caption_md = r["caption"] or ""
+
+        caption_html = bleach.clean(
+            markdown.markdown(
+                caption_md,
+                extensions=["fenced_code"]
+            ),
+            tags=["h1", "h2", "h3", "p", "strong", "em", "ul", "li", "hr", "code", "pre"],
+            strip=True
+        )
         post = {
             "id": r["id"],
             "user_id": r["user_id"],
             "title": r["title"],
-            "caption": r["caption"],
+            "caption": caption_md,
+            "caption_html": caption_html,
             "author": r["username"] or "Anonymous",
             "post_type": r["post_type"],
             "up": r["up"] if r["up"] is not None else 0,
             "down": r["down"] if r["down"] is not None else 0,
         }
+
         # include latest comment (if any)
         try:
-            latest = db.execute("SELECT comment, created_at FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1", (r["id"],)).fetchone()
+            latest = db.execute("SELECT comment, created_at FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1",
+                                (r["id"],)).fetchone()
             if latest:
                 post["latest_comment"] = latest["comment"]
                 post["latest_comment_time"] = latest["created_at"]
@@ -371,7 +411,8 @@ def get_feed_stack():
 
         # include attachments for this post
         try:
-            rows = db.execute("SELECT id, filename, path FROM attachments WHERE post_id=? ORDER BY id ASC", (r["id"],)).fetchall()
+            rows = db.execute("SELECT id, filename, path FROM attachments WHERE post_id=? ORDER BY id ASC",
+                              (r["id"],)).fetchall()
             atts = []
             for a in rows:
                 atts.append({"id": a[0], "filename": a[1], "url": (a[2] if a[2].startswith('static/') else a[2])})
@@ -382,6 +423,7 @@ def get_feed_stack():
         stack.push(post)
     return stack.to_list()
 
+
 def perform_bst_search(keyword):
     posts = get_feed_stack()
     bst = BST()
@@ -389,6 +431,7 @@ def perform_bst_search(keyword):
         title = post.get("title", "") or ""
         bst.insert(title)
     return bst.dfs_search(keyword)
+
 
 # -------------------------
 # ROUTES
@@ -404,20 +447,20 @@ def register_page():
 
         if not username or not email or not password:
             return render_template("register.html", error="All fields are required.")
-        
+
         if password != confirm_password:
             return render_template("register.html", error="Passwords do not match.")
-        
+
         db = get_db()
         user = User.create_local(db, username, email, password)
-        
+
         if not user:
             return render_template("register.html", error="Username or email already exists.")
-        
+
         # Auto-login after registration
         AuthManager.login_user(user)
         return redirect(url_for("lectures"))
-    
+
     return render_template("register.html")
 
 
@@ -430,16 +473,16 @@ def login_page():
 
         if not username or not password:
             return render_template("login.html", error="Username and password required.")
-        
+
         db = get_db()
         user = User.authenticate(db, username, password)
-        
+
         if not user:
             return render_template("login.html", error="Invalid username or password.")
-        
+
         AuthManager.login_user(user)
         return redirect(url_for("lectures"))
-    
+
     return render_template("login.html")
 
 
@@ -514,7 +557,8 @@ def home():
         # attach latest comment for each result (if present)
         for item in results:
             try:
-                latest = db.execute("SELECT comment FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1", (item['id'],)).fetchone()
+                latest = db.execute("SELECT comment FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1",
+                                    (item['id'],)).fetchone()
                 item['latest_comment'] = latest['comment'] if latest else None
             except Exception:
                 item['latest_comment'] = None
@@ -523,6 +567,7 @@ def home():
     # default homepage load
     posts = get_feed_stack()
     return render_template("index.html", posts=posts, current_user=get_current_user_context())
+
 
 @app.route("/search_posts")
 def search_posts():
@@ -562,12 +607,14 @@ def search_posts():
     # attach latest comment for each search result
     for item in results:
         try:
-            latest = db.execute("SELECT comment FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1", (item['id'],)).fetchone()
+            latest = db.execute("SELECT comment FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1",
+                                (item['id'],)).fetchone()
             item['latest_comment'] = latest['comment'] if latest else None
         except Exception:
             item['latest_comment'] = None
 
     return jsonify(results)
+
 
 @app.route("/lectures", methods=["GET", "POST"])
 def lectures():
@@ -657,16 +704,38 @@ def lectures():
 
     return render_template("lectures.html", posts=final_posts, current_user=get_current_user_context())
 
+
+@app.route("/lecture/<int:id>")
+def lecture(id):
+    caption_md = get_caption_from_db(id)
+
+    html = markdown.markdown(
+        caption_md or "",
+        extensions=["fenced_code", "tables"]
+    )
+
+    clean_html = bleach.clean(
+        html,
+        tags=["h1", "h2", "h3", "p", "strong", "em", "ul", "li", "hr", "code", "pre"],
+        strip=True
+    )
+
+    return render_template(
+        "lecture.html",
+        caption=clean_html
+    )
+
+
 @app.route("/create_post", methods=["POST"])
 def create_post():
     if not AuthManager.is_authenticated():
         return jsonify({"ok": False, "error": "login_required"}), 401
-    
+
     db = get_db()
     user = AuthManager.get_current_user(db)
     if not user:
         return jsonify({"ok": False, "error": "user_not_found"}), 401
-    
+
     title = request.form.get("title")
     caption = request.form.get("caption")
     post_type = request.form.get("post_type", "regular")
@@ -695,7 +764,8 @@ def create_post():
             dest = os.path.join(upload_dir, safe_name)
             try:
                 f.save(dest)
-                db.execute("INSERT INTO attachments (post_id, filename, path) VALUES (?, ?, ?)", (post_id, f.filename, dest))
+                db.execute("INSERT INTO attachments (post_id, filename, path) VALUES (?, ?, ?)",
+                           (post_id, f.filename, dest))
             except Exception:
                 pass
         db.commit()
@@ -726,16 +796,20 @@ def comments_add():
     db.commit()
 
     # return latest comment for convenience
-    row = db.execute("SELECT id, comment, created_at FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1", (post_id_int,)).fetchone()
+    row = db.execute("SELECT id, comment, created_at FROM comments WHERE post_id=? ORDER BY id DESC LIMIT 1",
+                     (post_id_int,)).fetchone()
     return jsonify({'ok': True, 'comment': dict(row) if row else None})
 
 
 @app.route('/posts/<int:post_id>/comments')
 def comments_for_post(post_id):
     db = get_db()
-    rows = db.execute("SELECT id, post_id, user_id, comment, parent_id, created_at FROM comments WHERE post_id=? ORDER BY id ASC", (post_id,)).fetchall()
+    rows = db.execute(
+        "SELECT id, post_id, user_id, comment, parent_id, created_at FROM comments WHERE post_id=? ORDER BY id ASC",
+        (post_id,)).fetchall()
     results = [dict(r) for r in rows]
     return jsonify(results)
+
 
 @app.route("/vote/<int:id>/<string:way>", methods=["POST"])
 def vote(id, way):
@@ -749,6 +823,7 @@ def vote(id, way):
     if row:
         return jsonify({"ok": True, "up": row[0], "down": row[1]})
     return jsonify({"ok": False}), 404
+
 
 # schedule a cancellable delete from the UI (5 second delay)
 def perform_delete(post_id):
@@ -770,18 +845,18 @@ def perform_delete(post_id):
 @app.route("/delete/<int:id>", methods=["POST"])
 def schedule_delete(id):
     global pending_deletes
-    
+
     if not AuthManager.is_authenticated():
         return jsonify({"ok": False, "error": "login_required"}), 401
-    
+
     db = get_db()
     current_user = AuthManager.get_current_user(db)
-    
+
     # Check post ownership
     post = db.execute("SELECT user_id FROM posts WHERE id=?", (id,)).fetchone()
     if not post or post[0] != current_user.id:
         return jsonify({"ok": False, "error": "unauthorized"}), 403
-    
+
     if id in pending_deletes:
         return jsonify({"ok": True, "pending": True})
 
@@ -803,20 +878,21 @@ def cancel_delete(id):
         return jsonify({"ok": True, "cancelled": True})
     return jsonify({"ok": False, "error": "not_pending"}), 404
 
+
 # Edit should accept the same form fields used by your modal (title, caption)
 @app.route("/edit/<int:id>", methods=["POST"])
 def edit(id):
     if not AuthManager.is_authenticated():
         return jsonify({"ok": False, "error": "login_required"}), 401
-    
+
     db = get_db()
     current_user = AuthManager.get_current_user(db)
-    
+
     # Check post ownership
     post = db.execute("SELECT user_id FROM posts WHERE id=?", (id,)).fetchone()
     if not post or post[0] != current_user.id:
         return jsonify({"ok": False, "error": "unauthorized"}), 403
-    
+
     # Your modal sets the form to post title, caption (no author field)
     title = request.form.get("title")
     caption = request.form.get("caption")
@@ -829,9 +905,12 @@ def edit(id):
     db.commit()
     return redirect(url_for("lectures"))
 
+
 @app.route("/collaborators")
 def collaborators_page():
     return render_template("collaborators.html")
+
+
 # ----------------------
 # In-memory storage
 # ----------------------
@@ -843,13 +922,14 @@ bst_root = None
 bt_roots = []
 # Graph in-memory: vertices list and edges weight map
 graph_vertices = []  # list of dicts: {id, label}
-graph_edges = {}     # map (u_id, v_id) -> weight (int)
+graph_edges = {}  # map (u_id, v_id) -> weight (int)
 # edge weights used for trees/BT as well
 edge_weights = {}
 # pending deletions store: post_id -> threading.Timer
 pending_deletes = {}
 # pending detached subtrees store: token -> (type, node)
 pending_subtrees = {}
+
 
 # ----------------------
 # Tree / BST classes
@@ -866,6 +946,7 @@ class TreeNode:
         except Exception:
             self.id = None
 
+
 # ----------------------
 # Helpers
 # ----------------------
@@ -879,37 +960,45 @@ def escape_text(text):
             .replace('"', "&quot;")
             .replace("'", "&#39;"))
 
+
 # ----------------------
 # SVG renderers
 # ----------------------
 def render_queue_svg():
     width = max(300, 120 * max(1, len(queue)))
     height = 120
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
     for i, val in enumerate(queue):
         x = 20 + i * 120
         parts.append(f'<rect x="{x}" y="30" width="100" height="60" rx="8" fill="#4cc9ff" stroke="#fff"/>')
-        parts.append(f'<text x="{x+50}" y="65" font-size="18" text-anchor="middle" fill="#000">{escape_text(val)}</text>')
+        parts.append(
+            f'<text x="{x + 50}" y="65" font-size="18" text-anchor="middle" fill="#000">{escape_text(val)}</text>')
     parts.append('</svg>')
     return "".join(parts)
+
 
 def render_stack_svg():
     width = 200
     height = max(120, 80 * len(stack) + 20)
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
     for i, val in enumerate(reversed(stack)):
         y = 20 + i * 80
         parts.append(f'<rect x="40" y="{y}" width="120" height="60" rx="8" fill="#90f1a9" stroke="#fff"/>')
-        parts.append(f'<text x="100" y="{y+36}" font-size="18" text-anchor="middle" fill="#000">{escape_text(val)}</text>')
+        parts.append(
+            f'<text x="100" y="{y + 36}" font-size="18" text-anchor="middle" fill="#000">{escape_text(val)}</text>')
     parts.append('</svg>')
     return "".join(parts)
+
 
 def render_generic_tree_svg(root):
     if not root:
         return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200"></svg>'
 
     width, height = 1000, 600
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
 
     def traverse(node, x, y, level, span=200):
         if not node:
@@ -931,7 +1020,7 @@ def render_generic_tree_svg(root):
             cy = y + 100
             # edge weight lookup
             w = edge_weights.get((getattr(node, 'id', ''), getattr(ch, 'id', '')), 1)
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{cx}" y2="{cy}" stroke="#fff" stroke-width="{1 + (w-1)}"/>')
+            parts.append(f'<line x1="{x}" y1="{y}" x2="{cx}" y2="{cy}" stroke="#fff" stroke-width="{1 + (w - 1)}"/>')
             if w > 1:
                 mx = (x + cx) // 2
                 my = (y + cy) // 2
@@ -939,8 +1028,10 @@ def render_generic_tree_svg(root):
             traverse(ch, cx, cy, level + 1, max(60, span // 2))
 
         # include data-id and data-val attributes so client-side can bind click handlers
-        parts.append(f'<circle cx="{x}" cy="{y}" r="25" fill="#f8c537" stroke="#fff" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
-        parts.append(f'<text x="{x}" y="{y+5}" font-size="18" text-anchor="middle" fill="#000">{escape_text(node.val)}</text>')
+        parts.append(
+            f'<circle cx="{x}" cy="{y}" r="25" fill="#f8c537" stroke="#fff" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
+        parts.append(
+            f'<text x="{x}" y="{y + 5}" font-size="18" text-anchor="middle" fill="#000">{escape_text(node.val)}</text>')
 
     traverse(root, width // 2, 60, 1, 400)
     parts.append('</svg>')
@@ -954,7 +1045,8 @@ def render_tree_forest_svg(roots):
     width = 1000
     per_h = 260
     total_h = per_h * len(roots)
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{total_h}" viewBox="0 0 {width} {total_h}">']
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{total_h}" viewBox="0 0 {width} {total_h}">']
 
     def traverse(node, x, y, level, span=200):
         if not node:
@@ -976,15 +1068,18 @@ def render_tree_forest_svg(roots):
             parts.append(f'<line x1="{x}" y1="{y}" x2="{cx}" y2="{cy}" stroke="#fff"/>')
             traverse(ch, cx, cy, level + 1, max(60, span // 2))
 
-        parts.append(f'<circle cx="{x}" cy="{y}" r="25" fill="#f8c537" stroke="#fff" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
-        parts.append(f'<text x="{x}" y="{y+5}" font-size="20" text-anchor="middle" fill="#000">{escape_text(node.val)}</text>')
+        parts.append(
+            f'<circle cx="{x}" cy="{y}" r="25" fill="#f8c537" stroke="#fff" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
+        parts.append(
+            f'<text x="{x}" y="{y + 5}" font-size="20" text-anchor="middle" fill="#000">{escape_text(node.val)}</text>')
 
     for i, root in enumerate(roots):
         y0 = 40 + i * per_h
-        traverse(root, width//2, y0, 1)
+        traverse(root, width // 2, y0, 1)
 
     parts.append('</svg>')
     return ''.join(parts)
+
 
 # ----------------------
 # BST helpers
@@ -1001,10 +1096,12 @@ def bst_insert(node, val):
         node.right = bst_insert(node.right, val)
     return node
 
+
 # ----------------------
 # MANUAL BINARY TREE
 # ----------------------
 bt_root = None
+
 
 def render_binary_tree_svg(root):
     if not root:
@@ -1017,25 +1114,29 @@ def render_binary_tree_svg(root):
             return
 
         if node.left:
-            lx = x-spread
-            ly = y+100
-            w = edge_weights.get((getattr(node,'id',''), getattr(node.left,'id','')), 1)
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{lx}" y2="{ly}" stroke="white" stroke-width="{1 + (w-1)}"/>')
+            lx = x - spread
+            ly = y + 100
+            w = edge_weights.get((getattr(node, 'id', ''), getattr(node.left, 'id', '')), 1)
+            parts.append(f'<line x1="{x}" y1="{y}" x2="{lx}" y2="{ly}" stroke="white" stroke-width="{1 + (w - 1)}"/>')
             if w > 1:
-                parts.append(f'<text x="{(x+lx)//2}" y="{(y+ly)//2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
-            walk(node.left, lx, ly, spread//2)
+                parts.append(
+                    f'<text x="{(x + lx) // 2}" y="{(y + ly) // 2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+            walk(node.left, lx, ly, spread // 2)
 
         if node.right:
-            rx = x+spread
-            ry = y+100
-            w = edge_weights.get((getattr(node,'id',''), getattr(node.right,'id','')), 1)
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{rx}" y2="{ry}" stroke="white" stroke-width="{1 + (w-1)}"/>')
+            rx = x + spread
+            ry = y + 100
+            w = edge_weights.get((getattr(node, 'id', ''), getattr(node.right, 'id', '')), 1)
+            parts.append(f'<line x1="{x}" y1="{y}" x2="{rx}" y2="{ry}" stroke="white" stroke-width="{1 + (w - 1)}"/>')
             if w > 1:
-                parts.append(f'<text x="{(x+rx)//2}" y="{(y+ry)//2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
-            walk(node.right, rx, ry, spread//2)
+                parts.append(
+                    f'<text x="{(x + rx) // 2}" y="{(y + ry) // 2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+            walk(node.right, rx, ry, spread // 2)
 
-        parts.append(f'<circle cx="{x}" cy="{y}" r="25" fill="#ff6b6b" stroke="white" data-id="{node.id}" data-val="{escape_text(node.val)}"/>')
-        parts.append(f'<text x="{x}" y="{y+6}" text-anchor="middle" font-size="18" fill="black">{escape_text(node.val)}</text>')
+        parts.append(
+            f'<circle cx="{x}" cy="{y}" r="25" fill="#ff6b6b" stroke="white" data-id="{node.id}" data-val="{escape_text(node.val)}"/>')
+        parts.append(
+            f'<text x="{x}" y="{y + 6}" text-anchor="middle" font-size="18" fill="black">{escape_text(node.val)}</text>')
 
     walk(root, 500, 50, 200)
     parts.append('</svg>')
@@ -1049,36 +1150,42 @@ def render_bt_forest_svg(roots):
     width = 1000
     per_h = 300
     total_h = per_h * len(roots)
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{total_h}" viewBox="0 0 {width} {total_h}">']
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{total_h}" viewBox="0 0 {width} {total_h}">']
 
     def walk(node, x, y, spread):
         if not node:
             return
         if node.left:
-            lx = x-spread
-            ly = y+100
-            w = edge_weights.get((getattr(node,'id',''), getattr(node.left,'id','')), 1)
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{lx}" y2="{ly}" stroke="white" stroke-width="{1 + (w-1)}"/>')
+            lx = x - spread
+            ly = y + 100
+            w = edge_weights.get((getattr(node, 'id', ''), getattr(node.left, 'id', '')), 1)
+            parts.append(f'<line x1="{x}" y1="{y}" x2="{lx}" y2="{ly}" stroke="white" stroke-width="{1 + (w - 1)}"/>')
             if w > 1:
-                parts.append(f'<text x="{(x+lx)//2}" y="{(y+ly)//2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
-            walk(node.left, lx, ly, spread//2)
+                parts.append(
+                    f'<text x="{(x + lx) // 2}" y="{(y + ly) // 2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+            walk(node.left, lx, ly, spread // 2)
         if node.right:
-            rx = x+spread
-            ry = y+100
-            w = edge_weights.get((getattr(node,'id',''), getattr(node.right,'id','')), 1)
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{rx}" y2="{ry}" stroke="white" stroke-width="{1 + (w-1)}"/>')
+            rx = x + spread
+            ry = y + 100
+            w = edge_weights.get((getattr(node, 'id', ''), getattr(node.right, 'id', '')), 1)
+            parts.append(f'<line x1="{x}" y1="{y}" x2="{rx}" y2="{ry}" stroke="white" stroke-width="{1 + (w - 1)}"/>')
             if w > 1:
-                parts.append(f'<text x="{(x+rx)//2}" y="{(y+ry)//2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
-            walk(node.right, rx, ry, spread//2)
-        parts.append(f'<circle cx="{x}" cy="{y}" r="25" fill="#ff6b6b" stroke="white" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
-        parts.append(f'<text x="{x}" y="{y+6}" text-anchor="middle" font-size="18" fill="black">{escape_text(node.val)}</text>')
+                parts.append(
+                    f'<text x="{(x + rx) // 2}" y="{(y + ry) // 2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+            walk(node.right, rx, ry, spread // 2)
+        parts.append(
+            f'<circle cx="{x}" cy="{y}" r="25" fill="#ff6b6b" stroke="white" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
+        parts.append(
+            f'<text x="{x}" y="{y + 6}" text-anchor="middle" font-size="18" fill="black">{escape_text(node.val)}</text>')
 
     for i, root in enumerate(roots):
         y0 = 50 + i * per_h
-        walk(root, width//2, y0, 200)
+        walk(root, width // 2, y0, 200)
 
     parts.append('</svg>')
     return ''.join(parts)
+
 
 @app.route("/bt/add-left", methods=["POST"])
 def bt_add_left():
@@ -1122,9 +1229,13 @@ def bt_add_left():
                 while q and not placed:
                     n = q.pop(0)
                     if not n.left:
-                        n.left = TreeNode(val); placed = True; break
+                        n.left = TreeNode(val);
+                        placed = True;
+                        break
                     if not n.right:
-                        n.right = TreeNode(val); placed = True; break
+                        n.right = TreeNode(val);
+                        placed = True;
+                        break
                     q.extend([n.left, n.right])
         else:
             bt_roots.append(TreeNode(val))
@@ -1181,9 +1292,13 @@ def bt_add_right():
                 while q and not placed:
                     n = q.pop(0)
                     if not n.left:
-                        n.left = TreeNode(val); placed = True; break
+                        n.left = TreeNode(val);
+                        placed = True;
+                        break
                     if not n.right:
-                        n.right = TreeNode(val); placed = True; break
+                        n.right = TreeNode(val);
+                        placed = True;
+                        break
                     q.extend([n.left, n.right])
         else:
             # parent not found -> create new root
@@ -1196,7 +1311,7 @@ def bt_add_right():
         else:
             bt_roots.append(TreeNode(val))
     return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
-    
+
 
 @app.route("/bt/reset", methods=["POST"])
 def bt_reset():
@@ -1216,6 +1331,7 @@ def bt_add_root():
     node = TreeNode(val)
     bt_roots.append(node)
     return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
+
 
 def bst_search(node, val):
     if not node:
@@ -1298,6 +1414,7 @@ def bst_detach(node, val):
         node.left = bst_delete(node.left, temp_val)
         return node, detached
 
+
 # ----------------------
 # Routes
 # ----------------------
@@ -1310,11 +1427,13 @@ def queue_enqueue():
     queue.append(val)
     return jsonify({"ok": True, "svg": render_queue_svg()})
 
+
 @app.route("/queue/dequeue", methods=["POST"])
 def queue_dequeue():
     if queue:
         queue.pop(0)
     return jsonify({"ok": True, "svg": render_queue_svg()})
+
 
 # Stack endpoints
 @app.route("/stack/push", methods=["POST"])
@@ -1325,11 +1444,13 @@ def stack_push():
     stack.append(val)
     return jsonify({"ok": True, "svg": render_stack_svg()})
 
+
 @app.route("/stack/pop", methods=["POST"])
 def stack_pop():
     if stack:
         stack.pop()
     return jsonify({"ok": True, "svg": render_stack_svg()})
+
 
 # Generic tree endpoints
 @app.route("/tree/insert", methods=["POST"])
@@ -1372,9 +1493,13 @@ def tree_insert_route():
                 while q and not placed:
                     n = q.pop(0)
                     if not n.left:
-                        n.left = new_node; placed = True; break
+                        n.left = new_node;
+                        placed = True;
+                        break
                     if not n.right:
-                        n.right = new_node; placed = True; break
+                        n.right = new_node;
+                        placed = True;
+                        break
                     q.extend([n.left, n.right])
         else:
             # parent not found -> create a new root
@@ -1384,6 +1509,7 @@ def tree_insert_route():
         tree_roots.append(new_node)
 
     return jsonify({"ok": True, "svg": render_tree_forest_svg(tree_roots)})
+
 
 # BST endpoints
 @app.route("/bst/insert", methods=["POST"])
@@ -1398,6 +1524,7 @@ def bst_insert_route():
         return jsonify({"ok": False, "error": "numeric only"})
     bst_root = bst_insert(bst_root, num)
     return jsonify({"ok": True, "svg": render_generic_tree_svg(bst_root)})
+
 
 @app.route("/bst/search", methods=["POST"])
 def bst_search_route():
@@ -1465,7 +1592,8 @@ def render_graph_svg():
     cy = height // 2
     r = min(cx, cy) - 80
     n = len(graph_vertices)
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
     coords = {}
     for i, v in enumerate(graph_vertices):
         angle = 2 * 3.14159 * i / max(1, n)
@@ -1478,15 +1606,18 @@ def render_graph_svg():
         if u not in coords or v not in coords: continue
         x1, y1 = coords[u]
         x2, y2 = coords[v]
-        parts.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#fff" stroke-width="{1 + (w-1)}"/>')
+        parts.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#fff" stroke-width="{1 + (w - 1)}"/>')
         if w > 1:
-            parts.append(f'<text x="{(x1+x2)//2}" y="{(y1+y2)//2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+            parts.append(
+                f'<text x="{(x1 + x2) // 2}" y="{(y1 + y2) // 2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
 
     # draw vertices
     for v in graph_vertices:
         x, y = coords[v['id']]
-        parts.append(f'<circle cx="{x}" cy="{y}" r="20" fill="#7bd389" stroke="#fff" data-id="{v["id"]}" data-val="{escape_text(v.get("label",""))}"/>')
-        parts.append(f'<text x="{x}" y="{y+6}" text-anchor="middle" font-size="14" fill="#000">{escape_text(v.get("label",""))}</text>')
+        parts.append(
+            f'<circle cx="{x}" cy="{y}" r="20" fill="#7bd389" stroke="#fff" data-id="{v["id"]}" data-val="{escape_text(v.get("label", ""))}"/>')
+        parts.append(
+            f'<text x="{x}" y="{y + 6}" text-anchor="middle" font-size="14" fill="#000">{escape_text(v.get("label", ""))}</text>')
 
     parts.append('</svg>')
     return ''.join(parts)
@@ -1612,6 +1743,8 @@ def tree_reset():
     global tree_roots
     tree_roots.clear()
     return jsonify({"ok": True, "svg": render_tree_forest_svg(tree_roots)})
+
+
 @app.route('/bt/delete', methods=['POST'])
 def bt_delete_route():
     global bt_roots
@@ -1680,6 +1813,7 @@ def reattach_subtree(token):
         return jsonify({'ok': False, 'error': 'token_not_found'}), 404
 
     typ, node = item
+
     # helper to find node by id
     def find_by_id(root, tid):
         q = [root]
@@ -1700,6 +1834,7 @@ def reattach_subtree(token):
             out.append(n.val)
             collect_vals(n.left, out)
             collect_vals(n.right, out)
+
         vals = []
         collect_vals(node, vals)
         for v in vals:
@@ -1743,9 +1878,13 @@ def reattach_subtree(token):
                     while q and not placed:
                         n = q.pop(0)
                         if not n.left:
-                            n.left = node; placed = True; break
+                            n.left = node;
+                            placed = True;
+                            break
                         if not n.right:
-                            n.right = node; placed = True; break
+                            n.right = node;
+                            placed = True;
+                            break
                         q.extend([n.left, n.right])
             # ensure edge_weights entries exist for any edges in the reattached subtree
             try:
@@ -1754,19 +1893,20 @@ def reattach_subtree(token):
                     if not n: return res
                     if getattr(n, 'children', None):
                         for c in n.children:
-                            res.append((getattr(n,'id',''), getattr(c,'id','')))
+                            res.append((getattr(n, 'id', ''), getattr(c, 'id', '')))
                             res.extend(collect_edges(c))
                     else:
                         if n.left:
-                            res.append((getattr(n,'id',''), getattr(n.left,'id','')))
+                            res.append((getattr(n, 'id', ''), getattr(n.left, 'id', '')))
                             res.extend(collect_edges(n.left))
                         if n.right:
-                            res.append((getattr(n,'id',''), getattr(n.right,'id','')))
+                            res.append((getattr(n, 'id', ''), getattr(n.right, 'id', '')))
                             res.extend(collect_edges(n.right))
                     return res
-                for u,v in collect_edges(node):
-                    if (u,v) not in edge_weights:
-                        edge_weights[(u,v)] = 1
+
+                for u, v in collect_edges(node):
+                    if (u, v) not in edge_weights:
+                        edge_weights[(u, v)] = 1
             except Exception:
                 pass
             return jsonify({'ok': True, 'svg': render_tree_forest_svg(tree_roots)})
@@ -1810,9 +1950,13 @@ def reattach_subtree(token):
                     while q and not placed:
                         n = q.pop(0)
                         if not n.left:
-                            n.left = node; placed = True; break
+                            n.left = node;
+                            placed = True;
+                            break
                         if not n.right:
-                            n.right = node; placed = True; break
+                            n.right = node;
+                            placed = True;
+                            break
                         q.extend([n.left, n.right])
             # if the detached subtree contains children, transfer any edge_weights entries into graph edge_weights keyed by ids
             try:
@@ -1821,19 +1965,20 @@ def reattach_subtree(token):
                     if not n: return res
                     if getattr(n, 'children', None):
                         for c in n.children:
-                            res.append((getattr(n,'id',''), getattr(c,'id','')))
+                            res.append((getattr(n, 'id', ''), getattr(c, 'id', '')))
                             res.extend(collect_edges(c))
                     else:
                         if n.left:
-                            res.append((getattr(n,'id',''), getattr(n.left,'id','')))
+                            res.append((getattr(n, 'id', ''), getattr(n.left, 'id', '')))
                             res.extend(collect_edges(n.left))
                         if n.right:
-                            res.append((getattr(n,'id',''), getattr(n.right,'id','')))
+                            res.append((getattr(n, 'id', ''), getattr(n.right, 'id', '')))
                             res.extend(collect_edges(n.right))
                     return res
-                for u,v in collect_edges(node):
-                    if (u,v) not in edge_weights:
-                        edge_weights[(u,v)] = 1
+
+                for u, v in collect_edges(node):
+                    if (u, v) not in edge_weights:
+                        edge_weights[(u, v)] = 1
             except Exception:
                 pass
             return jsonify({'ok': True, 'svg': render_bt_forest_svg(bt_roots)})
@@ -1843,6 +1988,7 @@ def reattach_subtree(token):
             return jsonify({'ok': True, 'svg': render_bt_forest_svg(bt_roots)})
 
     return jsonify({'ok': False, 'error': 'unknown_type'}), 400
+
 
 # RUN
 if __name__ == "__main__":

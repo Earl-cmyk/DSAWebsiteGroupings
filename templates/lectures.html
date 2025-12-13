@@ -52,6 +52,60 @@
     <button id="btn-create-post" class="btn btn-primary" aria-haspopup="dialog">Create a Post</button>
   </section>
 <section id="posts-list">
+  <!-- ========================= -->
+  <!-- REGULAR POSTS             -->
+  <!-- ========================= -->
+  {% for post in posts %}
+    {% if post.id > 0 %}
+      <article class="post-card" data-id="{{ post.id }}">
+        {% if current_user and post.user_id == current_user.id %}
+        <div class="three-dots" data-id="{{ post.id }}">⋯</div>
+        <div class="dropdown-menu" id="menu-{{ post.id }}">
+          <button class="edit-post" data-id="{{ post.id }}" data-title="{{ post.title }}" data-caption="{{ post.caption }}">✏️ Edit</button>
+          <button class="delete-post" onclick="deletePost({{ post.id }})">🗑️ Delete</button>
+        </div>
+        {% endif %}
+
+        <header>
+          <h3 class="post-title">{{ post.title }}</h3>
+          <p class="post-caption preserve">{{ post.caption_html | safe}}</p>
+          <p style="font-size:0.85rem;color:var(--muted);margin:4px 0;">By {{ post.author }}</p>
+        </header>
+        <div class="post-meta" style="margin-top:8px;color:var(--muted);font-size:0.9rem;">
+          <strong>Related Topics:</strong> {{ post.related_count }}
+        </div>
+            {% if post.latest_comment %}
+            <div class="post-meta" style="margin-top:6px;color:var(--muted);font-size:0.9rem;">
+              <strong>Latest Comment:</strong> <span class="preserve">{{ post.latest_comment }}</span>
+            </div>
+            {% endif %}
+            <div class="comments">
+              <div class="comments-list" id="comments-{{ post.id }}"></div>
+              <textarea id="comment-input-{{ post.id }}" placeholder="Add a comment…" rows="2"></textarea>
+              <div style="margin-top:6px;display:flex;gap:.5rem;">
+                <button class="btn btn-primary" onclick="submitComment({{ post.id }})">Comment</button>
+                <button class="btn" onclick="loadComments({{ post.id }})">Load All</button>
+              </div>
+            </div>
+        <footer>
+          <button class="vote-up" data-id="{{ post.id }}">▲ <span class="count">{{ post.up }}</span></button>
+          <button class="vote-down" data-id="{{ post.id }}">▼ <span class="count">{{ post.down }}</span></button>
+          {% if post.attachments and post.attachments|length > 0 %}
+            <div class="attachments" style="margin-top:6px;">
+              <strong>Attachments:</strong>
+              <ul>
+                {% for a in post.attachments %}
+                  <li><a href="/{{ a.url }}" target="_blank">{{ a.filename }}</a></li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+        </footer>
+      </article>
+    {% endif %}
+  {% endfor %}
+
+</section>
 
   <!-- ========================= -->
   <!-- INTERACTIVE DEMOS (ONLY ONCE) -->
@@ -187,61 +241,6 @@
       <svg id="graph-svg" width="800" height="400"></svg>
     </div>
   </article>
-
-  <!-- ========================= -->
-  <!-- REGULAR POSTS             -->
-  <!-- ========================= -->
-  {% for post in posts %}
-    {% if post.id > 0 %}
-      <article class="post-card" data-id="{{ post.id }}">
-        {% if current_user and post.user_id == current_user.id %}
-        <div class="three-dots" data-id="{{ post.id }}">⋯</div>
-        <div class="dropdown-menu" id="menu-{{ post.id }}">
-          <button class="edit-post" data-id="{{ post.id }}" data-title="{{ post.title }}" data-caption="{{ post.caption }}">✏️ Edit</button>
-          <button class="delete-post" onclick="deletePost({{ post.id }})">🗑️ Delete</button>
-        </div>
-        {% endif %}
-
-        <header>
-          <h3 class="post-title">{{ post.title }}</h3>
-          <p class="post-caption preserve">{{ post.caption }}</p>
-          <p style="font-size:0.85rem;color:var(--muted);margin:4px 0;">By {{ post.author }}</p>
-        </header>
-        <div class="post-meta" style="margin-top:8px;color:var(--muted);font-size:0.9rem;">
-          <strong>Related Topics:</strong> {{ post.related_count }}
-        </div>
-            {% if post.latest_comment %}
-            <div class="post-meta" style="margin-top:6px;color:var(--muted);font-size:0.9rem;">
-              <strong>Latest Comment:</strong> <span class="preserve">{{ post.latest_comment }}</span>
-            </div>
-            {% endif %}
-            <div class="comments">
-              <div class="comments-list" id="comments-{{ post.id }}"></div>
-              <textarea id="comment-input-{{ post.id }}" placeholder="Add a comment…" rows="2"></textarea>
-              <div style="margin-top:6px;display:flex;gap:.5rem;">
-                <button class="btn btn-primary" onclick="submitComment({{ post.id }})">Comment</button>
-                <button class="btn" onclick="loadComments({{ post.id }})">Load All</button>
-              </div>
-            </div>
-        <footer>
-          <button class="vote-up" data-id="{{ post.id }}">▲ <span class="count">{{ post.up }}</span></button>
-          <button class="vote-down" data-id="{{ post.id }}">▼ <span class="count">{{ post.down }}</span></button>
-          {% if post.attachments and post.attachments|length > 0 %}
-            <div class="attachments" style="margin-top:6px;">
-              <strong>Attachments:</strong>
-              <ul>
-                {% for a in post.attachments %}
-                  <li><a href="/{{ a.url }}" target="_blank">{{ a.filename }}</a></li>
-                {% endfor %}
-              </ul>
-            </div>
-          {% endif %}
-        </footer>
-      </article>
-    {% endif %}
-  {% endfor %}
-
-</section>
 
 
 <!-- ===================================== -->
