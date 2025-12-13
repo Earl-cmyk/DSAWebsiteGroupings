@@ -1,0 +1,534 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+    <div class="card shadow-sm mb-4">
+        <div class="card-body p-3">
+            <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between mb-3">
+                <div>
+                    <h1 class="h4 mb-0">Manila MRT/LRT Network</h1>
+                    <p class="text-muted mb-0">Find the fastest route between stations</p>
+                </div>
+                <div class="mt-3 mt-md-0">
+                    <a href="{{ url_for('home') }}" class="btn btn-outline-secondary btn-sm">
+                        <i class="bi bi-arrow-left me-1"></i> Back to Home
+                    </a>
+                </div>
+            </div>
+            
+            <div class="row g-3 align-items-end">
+                <div class="col-md-5">
+                    <label for="from-station" class="form-label">From Station</label>
+                    <select class="form-select" id="from-station">
+                        <option value="">Select departure station</option>
+                    </select>
+                </div>
+                <div class="col-md-5">
+                    <label for="to-station" class="form-label">To Station</label>
+                    <select class="form-select" id="to-station">
+                        <option value="">Select destination station</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button id="find-route" class="btn btn-primary w-100" disabled>
+                        <i class="bi bi-geo-alt me-1"></i> Find Route
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+        <div id="atlas-container" style="position: relative; min-height: 600px; background-color: #f8f9fa; overflow: hidden; border-radius: 8px; border: 1px solid #e9ecef;">
+            <div id="map-controls" style="position: absolute; top: 15px; right: 15px; z-index: 100; display: flex; flex-direction: column; gap: 8px;">
+                <button id="zoom-in" class="btn btn-light btn-sm shadow-sm" title="Zoom In">
+                    <i class="bi bi-plus"></i>
+                </button>
+                <button id="zoom-out" class="btn btn-light btn-sm shadow-sm" title="Zoom Out">
+                    <i class="bi bi-dash"></i>
+                </button>
+                <button id="reset-view" class="btn btn-light btn-sm shadow-sm" title="Reset View">
+                    <i class="bi bi-arrow-counterclockwise"></i>
+                </button>
+            </div>
+            <div id="loading" class="d-flex justify-content-center align-items-center" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.9); z-index: 10; border-radius: 8px;">
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2">Loading map...</p>
+                </div>
+            </div>
+            <div id="map-wrapper" style="width: 100%; height: 600px; overflow: hidden; position: relative;">
+                <div id="atlas-svg" style="width: 100%; height: 100%; transform-origin: 0 0; transition: transform 0.2s ease-out;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="route-results" class="card shadow-sm" style="display: none;">
+        <div class="card-body">
+            <h5 class="card-title mb-3">Route Information</h5>
+            <div class="row g-4 text-center">
+                <div class="col-md-4">
+                    <div class="p-3 bg-light rounded">
+                        <h3 class="text-primary mb-1" id="travel-time">-</h3>
+                        <p class="text-muted mb-0">Travel Time (min)</p>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="p-3 bg-light rounded">
+                        <h3 class="text-primary mb-1" id="distance">-</h3>
+                        <p class="text-muted mb-0">Distance (meters)</p>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="p-3 bg-light rounded">
+                        <h3 class="text-primary mb-1" id="stops">-</h3>
+                        <p class="text-muted mb-0">Stops</p>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-4">
+                <h6 class="mb-3">Route Details:</h6>
+                <div class="p-3 bg-light rounded" id="route-path">
+                    Select stations to find a route
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    #rail-map {
+        width: 100%;
+        height: 100%;
+        min-height: 600px;
+    }
+    
+    .station {
+        fill: #4a6baf;
+        stroke: white;
+        stroke-width: 2.5;
+        transition: all 0.2s;
+        cursor: pointer;
+        filter: drop-shadow(0 1px 2px rgba(0,0,0,0.2));
+    }
+    
+    .station:hover {
+        fill: #0d6efd;
+        transform: scale(1.8);
+        filter: drop-shadow(0 0 8px rgba(13, 110, 253, 0.5));
+    }
+    
+    .station.locked {
+        fill: #10b981;
+        stroke: white;
+        stroke-width: 3;
+        filter: drop-shadow(0 0 8px rgba(16, 185, 129, 0.7));
+    }
+    
+    .station-label {
+        font-size: 11px;
+        font-weight: 600;
+        fill: #2c3e50;
+        text-shadow: 0 0 4px white, 0 0 4px white, 0 0 4px white;
+        pointer-events: none;
+        transition: all 0.2s;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    }
+    
+    .station.locked + .station-label {
+        fill: #0d6efd;
+        font-weight: 700;
+        font-size: 12px;
+    }
+    
+    .line-mrt3 { 
+        stroke: #FFD700;
+        stroke-width: 5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+    
+    .line-lrt1 { 
+        stroke: #FF0000;
+        stroke-width: 5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+    
+    .line-lrt2 { 
+        stroke: #6F2DA8;
+        stroke-width: 5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+    
+    #route line {
+        stroke: #10b981;
+        stroke-width: 8;
+        stroke-linecap: round;
+        stroke-dasharray: 10, 5;
+        stroke-linejoin: round;
+        animation: dash 1s linear infinite;
+        opacity: 0.8;
+    }
+    
+    @keyframes dash {
+        to {
+            stroke-dashoffset: 15;
+        }
+    }
+    
+    #map-controls button {
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: white;
+        border: 1px solid #dee2e6;
+        border-radius: 6px;
+        color: #495057;
+        transition: all 0.2s;
+    }
+    
+    #map-controls button:hover {
+        background: #f8f9fa;
+        color: #0d6efd;
+        transform: translateY(-1px);
+    }
+    
+    #map-controls button:active {
+        transform: translateY(0);
+    }
+</style>
+
+<script>
+    // Global variables
+    let stations = [];
+    const svgEl = document.getElementById('atlas-svg');
+    const fromSelect = document.getElementById('from-station');
+    const toSelect = document.getElementById('to-station');
+    const findRouteBtn = document.getElementById('find-route');
+    const routeResults = document.getElementById('route-results');
+    const travelTimeEl = document.getElementById('travel-time');
+    const distanceEl = document.getElementById('distance');
+    const stopsEl = document.getElementById('stops');
+    const routePathEl = document.getElementById('route-path');
+    const loadingEl = document.getElementById('loading');
+    const atlasContainer = document.getElementById('atlas-container');
+
+    // Load SVG and initialize the map
+    async function loadSVG() {
+        try {
+            showLoading();
+            const response = await fetch('/atlas/svg');
+            const svgContent = await response.text();
+            svgEl.innerHTML = svgContent;
+            
+            // Extract stations from the SVG
+            stations = Array.from(svgEl.querySelectorAll('.station'))
+                .map(el => el.getAttribute('data-station'))
+                .filter(Boolean);
+            
+            // Populate dropdowns
+            populateDropdowns();
+            
+            // Add event listeners
+            setupEventListeners();
+            
+            // Hide loading indicator
+            hideLoading();
+            
+        } catch (error) {
+            console.error('Error loading map:', error);
+            showError('Error loading map. Please try again.');
+        }
+    }
+
+    function showLoading() {
+        loadingEl.style.display = 'flex';
+    }
+
+    function hideLoading() {
+        loadingEl.style.display = 'none';
+    }
+
+    function showError(message) {
+        svgEl.innerHTML = `
+            <div class="alert alert-danger m-3" role="alert">
+                <i class="bi bi-exclamation-triangle-fill me-2"></i>${message}
+            </div>
+        `;
+        hideLoading();
+    }
+
+    // Populate station dropdowns
+    function populateDropdowns() {
+        const options = stations.map(station => 
+            `<option value="${station}">${station}</option>`
+        ).join('');
+        
+        fromSelect.innerHTML = '<option value="">Select departure station</option>' + options;
+        toSelect.innerHTML = '<option value="">Select destination station</option>' + options;
+    }
+
+    // Setup event listeners
+    function setupEventListeners() {
+        // Update button state when selections change
+        [fromSelect, toSelect].forEach(select => {
+            select.addEventListener('change', updateButtonState);
+        });
+
+        // Find route button click
+        findRouteBtn.addEventListener('click', findRoute);
+
+        // Handle station clicks
+        svgEl.addEventListener('click', handleStationClick);
+    }
+
+    function handleStationClick(e) {
+        const stationEl = e.target.closest('.station');
+        if (!stationEl) return;
+
+        const station = stationEl.getAttribute('data-station');
+        if (!station) return;
+
+        // If from is not set, set it. Otherwise, set to.
+        if (!fromSelect.value) {
+            fromSelect.value = station;
+        } else if (!toSelect.value) {
+            toSelect.value = station;
+        } else {
+            // If both are set, cycle them
+            fromSelect.value = toSelect.value;
+            toSelect.value = station;
+        }
+
+        updateButtonState();
+        findRoute();
+    }
+
+    // Update find route button state
+    function updateButtonState() {
+        findRouteBtn.disabled = !(fromSelect.value && toSelect.value);
+    }
+
+    // Find route between stations
+    async function findRoute() {
+        const from = fromSelect.value;
+        const to = toSelect.value;
+        
+        if (!from || !to) {
+            return;
+        }
+
+        try {
+            findRouteBtn.disabled = true;
+            findRouteBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Finding...';
+            showLoading();
+
+            const response = await fetch('/atlas/route', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    src: from,
+                    dst: to
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+            }
+
+            const data = await response.json();
+            displayRouteResults(data);
+        } catch (error) {
+            console.error('Error finding route:', error);
+            showError('Error finding route. Please try again.');
+        } finally {
+            findRouteBtn.disabled = false;
+            findRouteBtn.innerHTML = '<i class="bi bi-geo-alt me-1"></i> Find Route';
+            hideLoading();
+        }
+    }
+
+    // Display route results
+    function displayRouteResults(data) {
+        if (!data.path || data.path.length === 0) {
+            showError('No route found between the selected stations.');
+            return;
+        }
+
+        // Update stats
+        travelTimeEl.textContent = data.minutes || '0';
+        distanceEl.textContent = data.meters || '0';
+        stopsEl.textContent = data.path.length - 1;
+
+        // Format path with arrows and line breaks for better readability
+        const pathText = data.path.join(' → ');
+        routePathEl.textContent = pathText;
+
+        // Show results
+        routeResults.style.display = 'block';
+        routeResults.scrollIntoView({ behavior: 'smooth' });
+
+        // Highlight path on the map
+        highlightPath(data.path);
+    }
+
+    // Highlight path on the map
+    function highlightPath(path) {
+        // Remove previous highlights
+        document.querySelectorAll('.station, #route').forEach(el => {
+            if (el.id !== 'route') {
+                el.classList.remove('locked');
+                const label = document.querySelector(`text[data-station="${el.getAttribute('data-station')}"]`);
+                if (label) label.classList.remove('active');
+            } else {
+                el.remove();
+            }
+        });
+
+        // Add new highlights
+        path.forEach(station => {
+            const stationEl = document.querySelector(`.station[data-station="${station}"]`);
+            if (stationEl) {
+                stationEl.classList.add('locked');
+                const label = document.querySelector(`text[data-station="${station}"]`);
+                if (label) label.classList.add('active');
+            }
+        });
+
+        // Add path highlighting
+        loadSVGWithPath(path);
+    }
+
+    // Load SVG with highlighted path
+    async function loadSVGWithPath(path) {
+        try {
+            showLoading();
+            const response = await fetch(`/atlas/svg?path=${encodeURIComponent(JSON.stringify(path))}`);
+            const svgContent = await response.text();
+            svgEl.innerHTML = svgContent;
+            
+            // Reattach event listeners
+            setupEventListeners();
+            
+        } catch (error) {
+            console.error('Error loading highlighted route:', error);
+            showError('Error loading route visualization.');
+        } finally {
+            hideLoading();
+        }
+    }
+
+    // Zoom and pan variables
+    let scale = 1;
+    let posX = 0;
+    let posY = 0;
+    let isDragging = false;
+    let startX, startY;
+    let startPosX, startPosY;
+
+    // Update SVG transform
+    function updateTransform() {
+        const svg = document.querySelector('#atlas-svg');
+        svg.style.transform = `translate(${posX}px, ${posY}px) scale(${scale})`;
+    }
+
+    // Handle mouse wheel for zooming
+    function handleWheel(e) {
+        e.preventDefault();
+        
+        const delta = -Math.sign(e.deltaY) * 0.1;
+        const newScale = Math.min(Math.max(0.5, scale + delta), 3);
+        
+        // Get mouse position relative to the container
+        const rect = document.getElementById('map-wrapper').getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        // Calculate new position to zoom toward cursor
+        posX = x - (x - posX) * (newScale / scale);
+        posY = y - (y - posY) * (newScale / scale);
+        
+        scale = newScale;
+        updateTransform();
+    }
+
+    // Handle mouse events for panning
+    function startDrag(e) {
+        if (e.button !== 0) return; // Only left click
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        startPosX = posX;
+        startPosY = posY;
+        document.body.style.cursor = 'grabbing';
+    }
+
+    function drag(e) {
+        if (!isDragging) return;
+        
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        
+        posX = startPosX + dx;
+        posY = startPosY + dy;
+        
+        updateTransform();
+    }
+
+    function endDrag() {
+        isDragging = false;
+        document.body.style.cursor = '';
+    }
+
+    // Initialize the map when the page loads
+    document.addEventListener('DOMContentLoaded', () => {
+        // Add Bootstrap Icons if not already loaded
+        if (!document.querySelector('link[href*="bootstrap-icons"]')) {
+            const iconLink = document.createElement('link');
+            iconLink.rel = 'stylesheet';
+            iconLink.href = 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css';
+            document.head.appendChild(iconLink);
+        }
+
+        // Setup zoom and pan
+        const mapWrapper = document.getElementById('map-wrapper');
+        mapWrapper.addEventListener('wheel', handleWheel, { passive: false });
+        mapWrapper.addEventListener('mousedown', startDrag);
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', endDrag);
+        document.addEventListener('mouseleave', endDrag);
+
+        // Zoom controls
+        document.getElementById('zoom-in').addEventListener('click', () => {
+            scale = Math.min(scale + 0.2, 3);
+            updateTransform();
+        });
+
+        document.getElementById('zoom-out').addEventListener('click', () => {
+            scale = Math.max(scale - 0.2, 0.5);
+            updateTransform();
+        });
+
+        document.getElementById('reset-view').addEventListener('click', () => {
+            scale = 1;
+            posX = 0;
+            posY = 0;
+            updateTransform();
+        });
+
+        // Prevent text selection during drag
+        document.addEventListener('selectstart', (e) => {
+            if (isDragging) e.preventDefault();
+        });
+
+        loadSVG();
+    });
+</script>
+{% endblock %}

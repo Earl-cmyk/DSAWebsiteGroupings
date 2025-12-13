@@ -8,6 +8,7 @@ from markupsafe import escape
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import markdown, bleach
+from atlas_data import atlas_graph
 
 ALLOWED_TAGS = [
     "h1","h2","h3","p","strong","em",
@@ -34,8 +35,6 @@ def md_to_safe_html(md_text: str) -> str:
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 DATABASE = os.environ.get("DATABASE_PATH", "/var/data/app.db")
-
-
 
 # -------------------------
 # OOP USER AUTHENTICATION
@@ -269,6 +268,319 @@ class BST:
         walk(self.root)
         return results
 
+import heapq
+
+class SimpleGraph:
+    def __init__(self):
+        self.edges = {}  # u -> v -> (minutes, meters)
+
+    def add_edge(self, u, v, minutes, meters):
+        self.edges.setdefault(u, {})[v] = (minutes, meters)
+        self.edges.setdefault(v, {})[u] = (minutes, meters)
+
+    def shortest_path(self, src, dst):
+        import heapq
+
+        pq = [(0, 0, src, [])]  # (time, distance, node, path)
+        seen = set()
+
+        while pq:
+            t, d, u, path = heapq.heappop(pq)
+            if u in seen:
+                continue
+
+            path = path + [u]
+
+            if u == dst:
+                return path, t, d
+
+            seen.add(u)
+
+            for v, (tm, dm) in self.edges.get(u, {}).items():
+                heapq.heappush(pq, (t + tm, d + dm, v, path))
+
+        return [], 0, 0
+
+
+# =========================
+# CREATE GRAPH
+# =========================
+graph = SimpleGraph()
+
+# =========================
+# MRT-3 (North ↔ South)
+# =========================
+graph.add_edge("North Ave", "Quezon Ave", 2, 1800)
+graph.add_edge("Quezon Ave", "GMA Kamuning", 2, 1600)
+graph.add_edge("GMA Kamuning", "Cubao MRT", 2, 1200)
+graph.add_edge("Cubao MRT", "Santolan Annapolis", 2, 1300)
+graph.add_edge("Santolan Annapolis", "Ortigas", 2, 2000)
+graph.add_edge("Ortigas", "Shaw Blvd", 2, 800)
+graph.add_edge("Shaw Blvd", "Boni", 2, 900)
+graph.add_edge("Boni", "Guadalupe", 2, 1000)
+graph.add_edge("Guadalupe", "Buendia MRT", 2, 2200)
+graph.add_edge("Buendia MRT", "Ayala", 2, 900)
+graph.add_edge("Ayala", "Magallanes", 2, 1200)
+graph.add_edge("Magallanes", "Taft Ave MRT", 2, 800)
+
+# =========================
+# LRT-1 (North ↔ South)
+# =========================
+graph.add_edge("Fernando Poe Jr", "Balintawak", 2, 2000)
+graph.add_edge("Balintawak", "Monumento", 2, 1200)
+graph.add_edge("Monumento", "5th Ave", 2, 900)
+graph.add_edge("5th Ave", "R. Papa", 2, 1000)
+graph.add_edge("R. Papa", "Abad Santos", 2, 900)
+graph.add_edge("Abad Santos", "Blumentritt LRT1", 2, 1100)
+graph.add_edge("Blumentritt LRT1", "Tayuman", 2, 700)
+graph.add_edge("Tayuman", "Bambang", 2, 600)
+graph.add_edge("Bambang", "Doroteo Jose", 2, 600)
+graph.add_edge("Doroteo Jose", "Carriedo", 2, 700)
+graph.add_edge("Carriedo", "Central Terminal", 2, 900)
+graph.add_edge("Central Terminal", "UN Ave", 2, 1000)
+graph.add_edge("UN Ave", "Pedro Gil", 2, 800)
+graph.add_edge("Pedro Gil", "Quirino", 2, 800)
+graph.add_edge("Quirino", "Vito Cruz", 2, 900)
+graph.add_edge("Vito Cruz", "Gil Puyat LRT1", 2, 1100)
+graph.add_edge("Gil Puyat LRT1", "Libertad", 2, 800)
+graph.add_edge("Libertad", "EDSA LRT1", 2, 900)
+graph.add_edge("EDSA LRT1", "Baclaran", 2, 700)
+graph.add_edge("Baclaran", "Redemptorist", 2, 900)
+graph.add_edge("Redemptorist", "MIA Road", 2, 1100)
+graph.add_edge("MIA Road", "Asia World", 2, 1200)
+
+# =========================
+# LRT-2 (West ↔ East)
+# =========================
+graph.add_edge("Recto", "Legarda", 2, 1300)
+graph.add_edge("Legarda", "Pureza", 2, 1200)
+graph.add_edge("Pureza", "V. Mapa", 2, 1400)
+graph.add_edge("V. Mapa", "J. Ruiz", 2, 1000)
+graph.add_edge("J. Ruiz", "Gilmore", 2, 900)
+graph.add_edge("Gilmore", "Betty Go-Belmonte", 2, 1000)
+graph.add_edge("Betty Go-Belmonte", "Cubao LRT2", 2, 800)
+graph.add_edge("Cubao LRT2", "Anonas", 2, 900)
+graph.add_edge("Anonas", "Katipunan", 2, 1100)
+graph.add_edge("Katipunan", "Santolan", 2, 1200)
+graph.add_edge("Santolan", "Marikina-Pasig", 3, 2500)
+graph.add_edge("Marikina-Pasig", "Antipolo", 3, 2800)
+
+def build_svg(path=None):
+    path = path or []
+    out = []
+    import math
+    import random
+
+    # Get all unique stations from edges
+    stations = set()
+    for u in graph.edges:
+        stations.add(u)
+        for v in graph.edges[u]:
+            stations.add(v)
+    stations = sorted(stations)
+    n = len(stations)
+
+    if n == 0:
+        return ""
+
+    # =========================
+    # FORCE-DIRECTED LAYOUT
+    # =========================
+    pos = {}
+    width, height = 1200, 800
+    k = math.sqrt((width * height) / n)  # Optimal distance between nodes
+    
+    # Initialize positions randomly
+    for station in stations:
+        pos[station] = {
+            'x': random.uniform(0, width),
+            'y': random.uniform(0, height),
+            'vx': 0,
+            'vy': 0
+        }
+
+    # Simple force-directed layout
+    def repulse():
+        for i, u in enumerate(stations):
+            for v in stations[i+1:]:
+                dx = pos[u]['x'] - pos[v]['x']
+                dy = pos[u]['y'] - pos[v]['y']
+                d = max(0.1, math.sqrt(dx*dx + dy*dy))
+                f = (k * k) / (d * d)
+                fx = f * dx / d
+                fy = f * dy / d
+                pos[u]['vx'] += fx
+                pos[u]['vy'] += fy
+                pos[v]['vx'] -= fx
+                pos[v]['vy'] -= fy
+
+    def attract():
+        for u in graph.edges:
+            for v in graph.edges[u]:
+                dx = pos[v]['x'] - pos[u]['x']
+                dy = pos[v]['y'] - pos[u]['y']
+                d = max(0.1, math.sqrt(dx*dx + dy*dy))
+                f = (d * d) / k
+                fx = f * dx / d
+                fy = f * dy / d
+                pos[u]['vx'] += fx
+                pos[u]['vy'] += fy
+                pos[v]['vx'] -= fx
+                pos[v]['vy'] -= fy
+
+    # Run force-directed layout
+    for _ in range(100):  # Number of iterations
+        repulse()
+        attract()
+        
+        # Update positions
+        for station in stations:
+            # Apply velocity
+            pos[station]['x'] += pos[station]['vx'] * 0.1
+            pos[station]['y'] += pos[station]['vy'] * 0.1
+            # Dampening
+            pos[station]['vx'] *= 0.9
+            pos[station]['vy'] *= 0.9
+            # Boundary conditions
+            pos[station]['x'] = max(50, min(width - 50, pos[station]['x']))
+            pos[station]['y'] = max(50, min(height - 50, pos[station]['y']))
+
+    # =========================
+    # EDGES
+    # =========================
+    out.append('<g id="edges">')
+    for u in graph.edges:
+        x1, y1 = pos[u]['x'], pos[u]['y']
+        for v in graph.edges[u]:
+            x2, y2 = pos[v]['x'], pos[v]['y']
+            # Determine line color based on line type
+            line_class = "line-mrt3" if "MRT" in u or "MRT" in v else "line-lrt1" if "LRT1" in u or "LRT1" in v else "line-lrt2"
+            out.append(
+                f'''
+                <line x1="{x1}" y1="{y1}"
+                      x2="{x2}" y2="{y2}"
+                      class="{line_class}"
+                      stroke-width="4"
+                      stroke-linecap="round"
+                      stroke-opacity="0.7"/>
+                '''
+            )
+    out.append('</g>')
+
+    # =========================
+    # ROUTE HIGHLIGHT
+    # =========================
+    if len(path) > 1:
+        out.append('<g id="route">')
+        for i in range(len(path)-1):
+            a, b = path[i], path[i+1]
+            x1, y1 = pos[a]['x'], pos[a]['y']
+            x2, y2 = pos[b]['x'], pos[b]['y']
+            out.append(
+                f'''
+                <line x1="{x1}" y1="{y1}"
+                      x2="{x2}" y2="{y2}"
+                      stroke="#10b981"
+                      stroke-width="6"
+                      stroke-linecap="round"
+                      stroke-dasharray="8,4"
+                      stroke-linejoin="round"/>
+                '''
+            )
+        out.append('</g>')
+
+    # =========================
+    # NODES
+    # =========================
+    out.append('<g id="nodes">')
+    for name in stations:
+        x, y = pos[name]['x'], pos[name]['y']
+        is_path = name in path
+        cls = "station" + (" locked" if is_path else "")
+        
+        # Add station marker
+        out.append(
+            f'''
+            <g class="node" transform="translate({x}, {y})">
+                <circle cx="0" cy="0" r="8"
+                        class="{cls}"
+                        data-station="{name}"
+                        style="cursor: pointer;"/>
+                <text x="12" y="4"
+                      class="station-label"
+                      data-station="{name}">
+                    {name}
+                </text>
+            </g>
+            '''
+        )
+    out.append('</g>')
+
+    # =========================
+    # FINAL SVG
+    # =========================
+    svg = f'''
+    <svg width="100%" height="100%" viewBox="0 0 {width} {height}"
+         xmlns="http://www.w3.org/2000/svg"
+         style="background: #f8f9fa;"
+         id="rail-map">
+        <defs>
+            <style>
+                .station {{
+                    fill: #6c757d;
+                    stroke: white;
+                    stroke-width: 2;
+                    transition: all 0.2s;
+                }}
+                .station:hover {{
+                    fill: #0d6efd;
+                    transform: scale(1.5);
+                }}
+                .station.locked {{
+                    fill: #10b981;
+                    stroke: white;
+                    stroke-width: 2;
+                    filter: drop-shadow(0 0 4px rgba(16, 185, 129, 0.5));
+                }}
+                .station-label {{
+                    font-size: 12px;
+                    font-weight: 500;
+                    fill: #495057;
+                    text-shadow: 0 0 3px white, 0 0 3px white, 0 0 3px white;
+                    pointer-events: none;
+                    transition: all 0.2s;
+                }}
+                .station.locked + .station-label {{
+                    fill: #10b981;
+                    font-weight: 600;
+                }}
+                .line-mrt3 {{ stroke: #FFD700; }}  /* Gold for MRT-3 */
+                .line-lrt1 {{ stroke: #FF0000; }}  /* Red for LRT-1 */
+                .line-lrt2 {{ stroke: #6F2DA8; }}  /* Purple for LRT-2 */
+            </style>
+        </defs>
+        <g transform="translate(0,0)">
+            {"".join(out)}
+        </g>
+        <g id="controls">
+            <rect x="20" y="20" width="180" height="100" rx="8" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+            <text x="30" y="45" font-size="12" font-weight="600">Line Legend</text>
+            <g transform="translate(30, 65)">
+                <line x1="0" y1="0" x2="20" y2="0" class="line-mrt3" stroke-width="4"/>
+                <text x="30" y="4" font-size="11">MRT-3</text>
+            </g>
+            <g transform="translate(30, 85)">
+                <line x1="0" y1="0" x2="20" y2="0" class="line-lrt1" stroke-width="4"/>
+                <text x="30" y="4" font-size="11">LRT-1</text>
+            </g>
+            <g transform="translate(30, 105)">
+                <line x1="0" y1="0" x2="20" y2="0" class="line-lrt2" stroke-width="4"/>
+                <text x="30" y="4" font-size="11">LRT-2</text>
+            </g>
+        </g>
+    </svg>
+    '''
+    return svg
 
 # -------------------------
 # DATABASE HELPERS
@@ -618,7 +930,7 @@ def search_posts():
         results.append({
             "id": r["id"],
             "title": r["title"] or "",
-            "caption_html": md_to_safe_html(caption_md),  # ✅ REQUIRED
+            "caption_html": md_to_safe_html(caption_md),  # 
             "related_count": 0
         })
 
@@ -1389,17 +1701,17 @@ def bst_delete(node, val):
     elif val > node.val:
         node.right = bst_delete(node.right, val)
     else:
-        # ✅ Case 1: No child
+        # Case 1: No child
         if not node.left and not node.right:
             return None
 
-        # ✅ Case 2: One child
+        # Case 2: One child
         if not node.left:
             return node.right
         if not node.right:
             return node.left
 
-        # ✅ Case 3: Two children
+        # Case 3: Two children
         temp = bst_find_max(node.left)
         node.val = temp
         node.left = bst_delete(node.left, temp)
@@ -2010,6 +2322,31 @@ def reattach_subtree(token):
             return jsonify({'ok': True, 'svg': render_bt_forest_svg(bt_roots)})
 
     return jsonify({'ok': False, 'error': 'unknown_type'}), 400
+
+@app.route("/atlas")
+def atlas():
+    return render_template("atlas.html")
+
+@app.route("/atlas/svg")
+def atlas_svg():
+    # Get the base SVG content (without any highlighted path)
+    try:
+        return atlas_graph.render_svg()
+    except Exception as e:
+        print(f"Error rendering SVG: {str(e)}")
+        return "<svg width='1200' height='600' xmlns='http://www.w3.org/2000/svg'><text x='20' y='30' fill='red'>Error loading map. Please check server logs.</text></svg>"
+
+@app.route("/atlas/route", methods=["POST"])
+def atlas_route():
+    data = request.json
+    src, dst = data["src"], data["dst"]
+    path, total_min, total_m = atlas_graph.shortest_path(src, dst)
+    return jsonify({
+        "path": path,
+        "minutes": total_min,
+        "meters": total_m,
+        "svg": atlas_graph.render_svg(path)
+    })
 
 # RUN
 if __name__ == "__main__":

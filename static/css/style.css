@@ -625,3 +625,25 @@ footer{
     background: transparent;
     padding: 1rem 0;
 }
+#atlas-svg {
+  background-color: #0b1220;  /* dark background */
+}
+
+circle.station {
+  fill: #94a3b8;
+  cursor: pointer;
+}
+
+circle.station:hover {
+  fill: #38bdf8;
+}
+
+circle.station.locked {
+  fill: #22c55e;
+}
+
+circle.active {
+  stroke: #facc15;
+  stroke-width: 3;
+}
+
