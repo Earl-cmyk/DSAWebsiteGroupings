@@ -253,6 +253,7 @@
 
     <form id="post-form" method="POST" enctype="multipart/form-data" action="{{ url_for('create_post') }}">
       <input type="hidden" id="post-id" name="id" value="">
+      <input type="hidden" id="post-author-input" name="author" value="">
 
       <label>Title:</label>
       <input type="text" id="post-title-input" name="title" required>

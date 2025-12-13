@@ -48,7 +48,6 @@
     .grid-cell.pulse {
         animation: cellPulse 0.4s forwards;
     }
-
     .auth-container {
         background: white;
         padding: 40px;
@@ -177,4 +176,107 @@
         text-decoration: underline;
     }
 </style>
-</head> <body> <div class="auth-container"> <h1>🔐 Login</h1> {% if error %} <div class="error-message">{{ error }}</div> {% endif %} <form method="POST"> <div class="form-group"> <label for="username">Username</label> <input type="text" id="username" name="username" required placeholder="Enter your username"> </div> <div class="form-group"> <label for="password">Password</label> <input type="password" id="password" name="password" required placeholder="Enter your password"> </div> <button type="submit" class="btn-login">Login</button> </form> <div class="oauth-section"> <p><strong>Or login with:</strong></p> <div class="oauth-buttons"> <a href="{{ url_for('oauth_github_login', code='demo') }}" class="oauth-btn github">GitHub</a> <a href="{{ url_for('oauth_google_login', code='demo') }}" class="oauth-btn google">Google</a> </div> </div> <div class="signup-link"> Don't have an account? <a href="{{ url_for('register_page') }}">Create one here</a> </div> </div> </body> <script> // GRID BACKGROUND EFFECT document.addEventListener("DOMContentLoaded", () => { const grid = document.getElementById("bg-grid"); const cellSize = 30; function createGrid() { grid.innerHTML = ""; const cols = Math.ceil(window.innerWidth / cellSize) + 2; const rows = Math.ceil(window.innerHeight / cellSize) + 2; grid.style.gridTemplateColumns = repeat(${cols}, ${cellSize}px); grid.style.width = ${cols * cellSize}px; grid.style.height = ${rows * cellSize}px; const total = cols * rows; for (let i = 0; i < total; i++) { const cell = document.createElement("div"); cell.classList.add("grid-cell"); grid.appendChild(cell); } return { cols, rows, cells: Array.from(grid.children) }; } let { cols, rows, cells } = createGrid(); function pulseCell(col, row) { if (col < 0 || row < 0 || col >= cols || row >= rows) return; const idx = row * cols + col; const cell = cells[idx]; if (!cell) return; cell.classList.add("active", "pulse"); setTimeout(() => cell.classList.remove("active"), 120); setTimeout(() => cell.classList.remove("pulse"), 400); } window.addEventListener("mousemove", e => { const rect = grid.getBoundingClientRect(); const col = Math.floor((e.clientX - rect.left) / cellSize); const row = Math.floor((e.clientY - rect.top) / cellSize); for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) pulseCell(col + dx, row + dy); }); window.addEventListener("resize", () => { ({ cols, rows, cells } = createGrid()); }); }); </script> </html>
+</head> <body> <div class="auth-container"> <h1>🔐 Login</h1> {% if error %} <div class="error-message">{{ error }}</div> {% endif %} <form method="POST"> <div class="form-group"> <label for="username">Username</label> <input type="text" id="username" name="username" required placeholder="Enter your username"> </div> <div class="form-group"> <label for="password">Password</label> <input type="password" id="password" name="password" required placeholder="Enter your password"> </div> <button type="submit" class="btn-login">Login</button> </form> <div class="oauth-section"> <p><strong>Or login with:</strong></p> <div class="oauth-buttons"> <a href="{{ url_for('oauth_github_login', code='demo') }}" class="oauth-btn github">GitHub</a> <a href="{{ url_for('oauth_google_login', code='demo') }}" class="oauth-btn google">Google</a> </div> </div> <div class="signup-link"> Don't have an account? <a href="{{ url_for('register_page') }}">Create one here</a> </div> </div> </body>
+<script>
+        // GRID BACKGROUND EFFECT
+document.addEventListener("DOMContentLoaded", () => {
+  const grid = document.getElementById("bg-grid");
+  const cellSize = 30;
+
+  function createGrid() {
+    grid.innerHTML = "";
+    const cols = Math.ceil(window.innerWidth / cellSize) + 2;
+    const rows = Math.ceil(window.innerHeight / cellSize) + 2;
+
+    grid.style.gridTemplateColumns = `repeat(${cols}, ${cellSize}px)`;
+    grid.style.width = `${cols * cellSize}px`;
+    grid.style.height = `${rows * cellSize}px`;
+
+    const total = cols * rows;
+    for (let i = 0; i < total; i++) {
+      const cell = document.createElement("div");
+      cell.classList.add("grid-cell");
+      grid.appendChild(cell);
+    }
+
+    return { cols, rows, cells: Array.from(grid.children) };
+  }
+
+  let { cols, rows, cells } = createGrid();
+
+  function pulseCell(col, row) {
+    if (col < 0 || row < 0 || col >= cols || row >= rows) return;
+    const idx = row * cols + col;
+    const cell = cells[idx];
+    if (!cell) return;
+    cell.classList.add("active", "pulse");
+    setTimeout(() => cell.classList.remove("active"), 120);
+    setTimeout(() => cell.classList.remove("pulse"), 400);
+  }
+
+  window.addEventListener("mousemove", e => {
+    const rect = grid.getBoundingClientRect();
+    const col = Math.floor((e.clientX - rect.left) / cellSize);
+    const row = Math.floor((e.clientY - rect.top) / cellSize);
+
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++)
+        pulseCell(col + dx, row + dy);
+  });
+
+  window.addEventListener("resize", () => {
+    ({ cols, rows, cells } = createGrid());
+  });
+});
+// GRID BACKGROUND EFFECT
+document.addEventListener("DOMContentLoaded", () => {
+  const grid = document.getElementById("bg-grid");
+  const cellSize = 30;
+
+  function createGrid() {
+    grid.innerHTML = "";
+    const cols = Math.ceil(window.innerWidth / cellSize) + 2;
+    const rows = Math.ceil(window.innerHeight / cellSize) + 2;
+
+    grid.style.gridTemplateColumns = `repeat(${cols}, ${cellSize}px)`;
+    grid.style.width = `${cols * cellSize}px`;
+    grid.style.height = `${rows * cellSize}px`;
+
+    const total = cols * rows;
+    for (let i = 0; i < total; i++) {
+      const cell = document.createElement("div");
+      cell.classList.add("grid-cell");
+      grid.appendChild(cell);
+    }
+
+    return { cols, rows, cells: Array.from(grid.children) };
+  }
+
+  let { cols, rows, cells } = createGrid();
+
+  function pulseCell(col, row) {
+    if (col < 0 || row < 0 || col >= cols || row >= rows) return;
+    const idx = row * cols + col;
+    const cell = cells[idx];
+    if (!cell) return;
+    cell.classList.add("active", "pulse");
+    setTimeout(() => cell.classList.remove("active"), 120);
+    setTimeout(() => cell.classList.remove("pulse"), 400);
+  }
+
+  window.addEventListener("mousemove", e => {
+    const rect = grid.getBoundingClientRect();
+    const col = Math.floor((e.clientX - rect.left) / cellSize);
+    const row = Math.floor((e.clientY - rect.top) / cellSize);
+
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++)
+        pulseCell(col + dx, row + dy);
+  });
+
+  window.addEventListener("resize", () => {
+    ({ cols, rows, cells } = createGrid());
+  });
+});
+</script>
+</html>

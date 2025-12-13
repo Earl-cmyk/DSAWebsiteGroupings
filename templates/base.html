@@ -8,23 +8,109 @@
 
   {% block styles %}{% endblock %}
 </head>
+<style>
+  #bg-grid {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    display: grid;
+    transform: translate(-50%, -50%);
+    z-index: -10;
+    pointer-events: none;
+  }
 
+  .grid-cell {
+    width: 60px;
+    height: 60px;
+    background: #0a1a3a;
+    transition: background 0.12s linear, box-shadow 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+    box-sizing: border-box;
+    border: 2px solid rgba(255,255,255,0.06);
+    opacity: 1;
+  }
+
+  .grid-cell:hover {
+    border-color: rgba(255,255,255,0.12);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    transform: translateY(-2px);
+  }
+
+  .grid-cell.active {
+    background: #1e90ff;
+    border-color: rgba(30,144,255,0.9);
+    box-shadow: 0 0 14px rgba(30,144,255,0.35), inset 0 0 6px rgba(255,255,255,0.04);
+  }
+
+  @keyframes cellPulse {
+    0% { background: #1e90ff; }
+    100% { background: #0a1a3a; }
+  }
+
+  .grid-cell.pulse {
+    animation: cellPulse 0.4s forwards;
+  }
+/* Desktop: hide hamburger */
+.nav-toggle {
+  display: none;
+}
+
+/* Mobile: show hamburger */
+@media (max-width: 768px) {
+  .nav-toggle {
+    display: block;
+    font-size: 1.8rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    margin-left: 1rem;
+  }
+
+  /* Optionally hide nav links by default */
+  .nav-links {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0;
+    right: -250px; /* hidden */
+    width: 250px;
+    height: 100vh;
+    background: rgba(0, 0, 128, 0.7);
+    padding-top: 60px;
+    gap: 1rem;
+    transition: right 0.3s ease;
+    box-shadow: -2px 0 5px rgba(0,0,0,0.2);
+    z-index: 1000;
+  }
+
+  .nav-links.show {
+    right: 0;
+  }
+}
+
+.element {
+  background-color: hsla(240, 100%, 25%, 0.7); /* same using HSL */
+}
+
+
+</style>
 <body>
 
   <div class="page-wrapper">
 
     <!-- NAVBAR -->
     <header class="navbar">
-      <div class="nav-left">
-        <a href="{{ url_for('home') }}" class="nav-brand">DSAWebLectures</a>
-        <span class="nav-subtitle">subject to change</span>
-      </div>
+    <div class="nav-left">
+      <a href="{{ url_for('home') }}" class="nav-brand">DSAWebLectures</a>
+      <span class="nav-subtitle">subject to change</span>
+      <button class="nav-toggle" aria-label="Toggle menu">☰</button>
+    </div>
 
-      <nav class="nav-links">
-        <a href="{{ url_for('home') }}">Home</a>
-        <a href="{{ url_for('lectures') }}">Lectures</a>
-        <a href="{{ url_for('collaborators_page') }}">Collaborators</a>
-      </nav>
+    <nav class="nav-links">
+      <a href="{{ url_for('home') }}">Home</a>
+      <a href="{{ url_for('lectures') }}">Lectures</a>
+      <a href="{{ url_for('collaborators_page') }}">Collaborators</a>
+    </nav>
+
       
       <div class="nav-auth">
         {% if current_user %}
@@ -54,4 +140,91 @@
   {% block scripts %}{% endblock %}
 
 </body>
+
+<script>
+  // Hamburger toggle
+  const toggle = document.querySelector('.nav-toggle');
+  const nav = document.querySelector('.nav-links');
+
+  toggle.addEventListener('click', () => {
+    nav.classList.toggle('show');
+  });
+
+  // Translucent navy blue background
+  const div = document.createElement('div');
+  div.style.backgroundColor = 'rgba(0, 0, 128, 0.7)';
+  div.style.position = 'fixed';
+  div.style.top = '0';
+  div.style.left = '0';
+  div.style.width = '100%';
+  div.style.height = '100%';
+  div.style.zIndex = '-1'; // behind content
+  document.body.appendChild(div);
+
+// GRID BACKGROUND EFFECT
+document.addEventListener("DOMContentLoaded", () => {
+  const grid = document.getElementById("bg-grid");
+  const cellSize = 30;
+
+  function createGrid() {
+    grid.innerHTML = "";
+    const cols = Math.ceil(window.innerWidth / cellSize) + 2;
+    const rows = Math.ceil(window.innerHeight / cellSize) + 2;
+
+    grid.style.gridTemplateColumns = `repeat(${cols}, ${cellSize}px)`;
+    grid.style.width = `${cols * cellSize}px`;
+    grid.style.height = `${rows * cellSize}px`;
+
+    const total = cols * rows;
+    for (let i = 0; i < total; i++) {
+      const cell = document.createElement("div");
+      cell.classList.add("grid-cell");
+      grid.appendChild(cell);
+    }
+
+    return { cols, rows, cells: Array.from(grid.children) };
+  }
+
+  let { cols, rows, cells } = createGrid();
+
+  function pulseCell(col, row) {
+    if (col < 0 || row < 0 || col >= cols || row >= rows) return;
+    const idx = row * cols + col;
+    const cell = cells[idx];
+    if (!cell) return;
+    cell.classList.add("active", "pulse");
+    setTimeout(() => cell.classList.remove("active"), 120);
+    setTimeout(() => cell.classList.remove("pulse"), 400);
+  }
+
+  window.addEventListener("mousemove", e => {
+    const rect = grid.getBoundingClientRect();
+    const col = Math.floor((e.clientX - rect.left) / cellSize);
+    const row = Math.floor((e.clientY - rect.top) / cellSize);
+
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++)
+        pulseCell(col + dx, row + dy);
+  });
+
+  window.addEventListener("resize", () => {
+    ({ cols, rows, cells } = createGrid());
+  });
+});
+
+document.getElementById("bst-max").onclick = async () => {
+  const res = await fetch("/bst/max");
+  const data = await res.json();
+  document.getElementById("bst-info").innerText =
+    "Max Value: " + data.max;
+};
+
+document.getElementById("bst-height").onclick = async () => {
+  const res = await fetch("/bst/height");
+  const data = await res.json();
+  document.getElementById("bst-info").innerText =
+    "Tree Height: " + data.height;
+};
+
+</script>
 </html>
