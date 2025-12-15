@@ -1,7 +1,114 @@
 {% extends "base.html" %}
-{% block content %}
+{% block title %}Electrical Circuit Designer - {{ super() }}{% endblock %}
+{% block styles %}
+{{ super() }}
+<style>
+    #rail-map {
+        width: 100%;
+        height: 100%;
+        min-height: 600px;
+    }
+
+    .station {
+        fill: #4a6baf;
+        stroke: white;
+        stroke-width: 2.5;
+        transition: all 0.2s;
+        cursor: pointer;
+        filter: drop-shadow(0 1px 2px rgba(0,0,0,0.2));
+    }
+
+    .station:hover {
+        fill: #0d6efd;
+        transform: scale(1.8);
+        filter: drop-shadow(0 0 8px rgba(13, 110, 253, 0.5));
+    }
+
+    .station.locked {
+        fill: #10b981;
+        stroke: white;
+        stroke-width: 3;
+        filter: drop-shadow(0 0 8px rgba(16, 185, 129, 0.7));
+    }
+
+    .station-label {
+        font-size: 11px;
+        font-weight: 600;
+        fill: #2c3e50;
+        text-shadow: 0 0 4px white, 0 0 4px white, 0 0 4px white;
+        pointer-events: none;
+        transition: all 0.2s;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    }
+
+    .station.locked + .station-label {
+        fill: #0d6efd;
+        font-weight: 700;
+        font-size: 12px;
+    }
+
+    .line-mrt3 {
+        stroke: #FFD700;
+        stroke-width: 5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+
+    .line-lrt1 {
+        stroke: #FF0000;
+        stroke-width: 5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+
+    .line-lrt2 {
+        stroke: #6F2DA8;
+        stroke-width: 5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+
+    #route line {
+        stroke: #10b981;
+        stroke-width: 8;
+        stroke-linecap: round;
+        stroke-dasharray: 10, 5;
+        stroke-linejoin: round;
+        animation: dash 1s linear infinite;
+        opacity: 0.8;
+    }
+
+    @keyframes dash {
+        to {
+            stroke-dashoffset: 15;
+        }
+    }
+
+    #map-controls button {
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: white;
+        border: 1px solid #dee2e6;
+        border-radius: 6px;
+        color: #495057;
+        transition: all 0.2s;
+    }
+
+    #map-controls button:hover {
+        background: #f8f9fa;
+        color: #0d6efd;
+        transform: translateY(-1px);
+    }
+
+    #map-controls button:active {
+        transform: translateY(0);
+    }
+</style>
 <div id="bg-grid"></div>
-<div class="container mt-4">
+<div class="post-card">
     <div class="card shadow-sm mb-4">
         <div class="card-body p-3">
             <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between mb-3">
@@ -15,7 +122,7 @@
                     </a>
                 </div>
             </div>
-            
+
             <div class="row g-3 align-items-end">
                 <div class="col-md-5">
                     <label for="from-station" class="form-label">From Station</label>
@@ -98,111 +205,7 @@
     </div>
 </div>
 
-<style>
-    #rail-map {
-        width: 100%;
-        height: 100%;
-        min-height: 600px;
-    }
-    
-    .station {
-        fill: #4a6baf;
-        stroke: white;
-        stroke-width: 2.5;
-        transition: all 0.2s;
-        cursor: pointer;
-        filter: drop-shadow(0 1px 2px rgba(0,0,0,0.2));
-    }
-    
-    .station:hover {
-        fill: #0d6efd;
-        transform: scale(1.8);
-        filter: drop-shadow(0 0 8px rgba(13, 110, 253, 0.5));
-    }
-    
-    .station.locked {
-        fill: #10b981;
-        stroke: white;
-        stroke-width: 3;
-        filter: drop-shadow(0 0 8px rgba(16, 185, 129, 0.7));
-    }
-    
-    .station-label {
-        font-size: 11px;
-        font-weight: 600;
-        fill: #2c3e50;
-        text-shadow: 0 0 4px white, 0 0 4px white, 0 0 4px white;
-        pointer-events: none;
-        transition: all 0.2s;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    }
-    
-    .station.locked + .station-label {
-        fill: #0d6efd;
-        font-weight: 700;
-        font-size: 12px;
-    }
-    
-    .line-mrt3 { 
-        stroke: #FFD700;
-        stroke-width: 5;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-    }
-    
-    .line-lrt1 { 
-        stroke: #FF0000;
-        stroke-width: 5;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-    }
-    
-    .line-lrt2 { 
-        stroke: #6F2DA8;
-        stroke-width: 5;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-    }
-    
-    #route line {
-        stroke: #10b981;
-        stroke-width: 8;
-        stroke-linecap: round;
-        stroke-dasharray: 10, 5;
-        stroke-linejoin: round;
-        animation: dash 1s linear infinite;
-        opacity: 0.8;
-    }
-    
-    @keyframes dash {
-        to {
-            stroke-dashoffset: 15;
-        }
-    }
-    
-    #map-controls button {
-        width: 36px;
-        height: 36px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: white;
-        border: 1px solid #dee2e6;
-        border-radius: 6px;
-        color: #495057;
-        transition: all 0.2s;
-    }
-    
-    #map-controls button:hover {
-        background: #f8f9fa;
-        color: #0d6efd;
-        transform: translateY(-1px);
-    }
-    
-    #map-controls button:active {
-        transform: translateY(0);
-    }
-</style>
+
 
 <script>
     // Global variables
@@ -226,21 +229,21 @@
             const response = await fetch('/atlas/svg');
             const svgContent = await response.text();
             svgEl.innerHTML = svgContent;
-            
+
             // Extract stations from the SVG
             stations = Array.from(svgEl.querySelectorAll('.station'))
                 .map(el => el.getAttribute('data-station'))
                 .filter(Boolean);
-            
+
             // Populate dropdowns
             populateDropdowns();
-            
+
             // Add event listeners
             setupEventListeners();
-            
+
             // Hide loading indicator
             hideLoading();
-            
+
         } catch (error) {
             console.error('Error loading map:', error);
             showError('Error loading map. Please try again.');
@@ -266,10 +269,10 @@
 
     // Populate station dropdowns
     function populateDropdowns() {
-        const options = stations.map(station => 
+        const options = stations.map(station =>
             `<option value="${station}">${station}</option>`
         ).join('');
-        
+
         fromSelect.innerHTML = '<option value="">Select departure station</option>' + options;
         toSelect.innerHTML = '<option value="">Select destination station</option>' + options;
     }
@@ -319,7 +322,7 @@
     async function findRoute() {
         const from = fromSelect.value;
         const to = toSelect.value;
-        
+
         if (!from || !to) {
             return;
         }
@@ -414,10 +417,10 @@
             const response = await fetch(`/atlas/svg?path=${encodeURIComponent(JSON.stringify(path))}`);
             const svgContent = await response.text();
             svgEl.innerHTML = svgContent;
-            
+
             // Reattach event listeners
             setupEventListeners();
-            
+
         } catch (error) {
             console.error('Error loading highlighted route:', error);
             showError('Error loading route visualization.');
@@ -443,19 +446,19 @@
     // Handle mouse wheel for zooming
     function handleWheel(e) {
         e.preventDefault();
-        
+
         const delta = -Math.sign(e.deltaY) * 0.1;
         const newScale = Math.min(Math.max(0.5, scale + delta), 3);
-        
+
         // Get mouse position relative to the container
         const rect = document.getElementById('map-wrapper').getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
-        
+
         // Calculate new position to zoom toward cursor
         posX = x - (x - posX) * (newScale / scale);
         posY = y - (y - posY) * (newScale / scale);
-        
+
         scale = newScale;
         updateTransform();
     }
@@ -473,13 +476,13 @@
 
     function drag(e) {
         if (!isDragging) return;
-        
+
         const dx = e.clientX - startX;
         const dy = e.clientY - startY;
-        
+
         posX = startPosX + dx;
         posY = startPosY + dy;
-        
+
         updateTransform();
     }
 

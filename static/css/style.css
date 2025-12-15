@@ -109,6 +109,7 @@ body {
   backdrop-filter: blur(10px);
   color: var(--text);
   z-index: 1000;
+  border: 3px solid #0a1a3a;
 }
 .nav-brand {
   font-weight: 700;
@@ -284,9 +285,11 @@ body {
   padding: 1rem;
   border-radius: var(--card-radius);
   margin-bottom: 1rem;
+  margin: 1rem auto;
   border: 1px solid var(--accent);
   box-shadow: 0 8px 20px rgba(2,6,23,0.45);
   transition: var(--transition);
+  width: 1000px;
 }
 .post-card:hover {
   transform: translateY(-6px);

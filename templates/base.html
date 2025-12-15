@@ -4,11 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}DSAWebLectures{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
 
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
   {% block styles %}{% endblock %}
-</head>
+
 <style>
+/* =====================
+   GLOBAL
+===================== */
+body {
+  margin: 0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
   #bg-grid {
     position: fixed;
     top: 50%;
@@ -49,60 +57,196 @@
   .grid-cell.pulse {
     animation: cellPulse 0.4s forwards;
   }
-/* Desktop: hide hamburger */
-.nav-toggle {
+/* =====================
+   BLUR WHEN MODAL OPEN
+===================== */
+.page-wrapper.blur {
+  filter: blur(6px);
+  pointer-events: none;
+}
+
+/* =====================
+   MODALS
+===================== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 999;
+}
+
+.auth-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: white;
+  padding: 2rem;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 400px;
+  z-index: 1000;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+}
+
+.auth-modal h2 {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.auth-modal input {
+  width: 100%;
+  padding: 12px;
+  margin-bottom: 1rem;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+}
+
+.auth-modal button {
+  width: 100%;
+  padding: 12px;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.auth-modal button:hover {
+  transform: translateY(-1px);
+}
+
+.switch {
+  text-align: center;
+  margin-top: 1rem;
+}
+
+.switch a {
+  cursor: pointer;
+  font-weight: bold;
+  color: #667eea;
+}
+
+.hidden {
   display: none;
 }
 
-/* Mobile: show hamburger */
+.login-btn {
+  background: white;
+  color: #333;
+}
+
+.register-btn {
+  background: #667eea;
+  color: white;
+}
+
+/* =====================
+   FOOTER
+===================== */
+.footer {
+  text-align: center;
+  padding: 1rem;
+  background: #0a1a3a;
+  color: #aaa;
+}
+    /* Desktop: hide burger */
+.nav-toggle {
+  display: none;
+  font-size: 1.8rem;
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+}
+
+/* Mobile behavior */
 @media (max-width: 768px) {
+
   .nav-toggle {
     display: block;
-    font-size: 1.8rem;
-    background: none;
-    border: none;
-    cursor: pointer;
-    margin-left: 1rem;
   }
 
-  /* Optionally hide nav links by default */
   .nav-links {
-    display: flex;
-    flex-direction: column;
     position: fixed;
     top: 0;
-    right: -250px; /* hidden */
-    width: 250px;
+    right: -260px; /* hidden */
     height: 100vh;
-    background: rgba(0, 0, 128, 0.7);
-    padding-top: 60px;
-    gap: 1rem;
+    width: 260px;
+    background: rgba(0, 0, 128, 0.9);
+    padding: 80px 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
     transition: right 0.3s ease;
-    box-shadow: -2px 0 5px rgba(0,0,0,0.2);
-    z-index: 1000;
+    z-index: 1200;
   }
 
   .nav-links.show {
     right: 0;
   }
-}
 
-.element {
-  background-color: hsla(240, 100%, 25%, 0.7); /* same using HSL */
+  .nav-links a {
+    font-size: 1.1rem;
+  }
 }
-
 
 </style>
+</head>
+
 <body>
 
-  <div class="page-wrapper">
+<!-- =====================
+     MODAL OVERLAY
+===================== -->
+<div id="modal-overlay" class="modal-overlay hidden"></div>
 
-    <!-- NAVBAR -->
-    <header class="navbar">
+<!-- =====================
+     LOGIN MODAL
+===================== -->
+<div id="login-modal" class="auth-modal hidden">
+  <h2>🔐 Login</h2>
+  <form method="POST" action="{{ url_for('login_page') }}">
+    <input name="username" placeholder="Username" required>
+    <input name="password" type="password" placeholder="Password" required>
+    <button type="submit">Login</button>
+  </form>
+  <div class="switch">
+    No account?
+    <a onclick="switchModal('register')">Register</a>
+  </div>
+</div>
+
+<!-- =====================
+     REGISTER MODAL
+===================== -->
+<div id="register-modal" class="auth-modal hidden">
+  <h2>📝 Register</h2>
+  <form method="POST" action="{{ url_for('register_page') }}">
+    <input name="username" placeholder="Username" required>
+    <input name="email" type="email" placeholder="Email" required>
+    <input name="password" type="password" placeholder="Password" required>
+    <input name="confirm_password" type="password" placeholder="Confirm Password" required>
+    <button type="submit">Create Account</button>
+  </form>
+  <div class="switch">
+    Already have an account?
+    <a onclick="switchModal('login')">Login</a>
+  </div>
+</div>
+
+<!-- =====================
+     PAGE CONTENT
+===================== -->
+<div class="page-wrapper">
+
+  <!-- NAVBAR -->
+  <header class="navbar">
     <div class="nav-left">
       <a href="{{ url_for('home') }}" class="nav-brand">DSAWebLectures</a>
-      <span class="nav-subtitle">subject to change</span>
-      <button class="nav-toggle" aria-label="Toggle menu">☰</button>
+      <span style="opacity:0.7;font-size:0.9rem;">By: FBOOTLEG</span>
+        <button class="nav-toggle" aria-label="Toggle menu">☰</button>
     </div>
 
     <nav class="nav-links">
@@ -113,44 +257,63 @@
       <a href="{{ url_for('eleccirc') }}">Electrical Circuits</a>
     </nav>
 
-      
-      <div class="nav-auth">
-        {% if current_user %}
-        <span class="nav-user">👤 {{ current_user.username }}</span>
-        <form method="POST" action="{{ url_for('logout') }}" style="display: inline;">
-          <button type="submit" class="nav-btn logout-btn">Logout</button>
+    <div class="nav-auth">
+      {% if current_user %}
+        <span>👤 {{ current_user.username }}</span>
+        <form method="POST" action="{{ url_for('logout') }}" style="display:inline;">
+          <button class="nav-btn">Logout</button>
         </form>
-        {% else %}
-        <a href="{{ url_for('login_page') }}" class="nav-btn login-btn">Login</a>
-        <a href="{{ url_for('register_page') }}" class="nav-btn register-btn">Register</a>
-        {% endif %}
-      </div>
-    </header>
+      {% else %}
+        <button class="nav-btn login-btn" onclick="openModal('login')">Login</button>
+        <button class="nav-btn register-btn" onclick="openModal('register')">Register</button>
+      {% endif %}
+    </div>
+  </header>
 
-    <!-- MAIN CONTENT -->
-    <main class="main-content">
-      {% block content %}{% endblock %}
-    </main>
- </div>
+  <!-- MAIN -->
+  <main class="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+</div>
+
 <!-- FOOTER -->
 <footer class="footer">
-  <p>© 2025 DSAWebLectures — Subject to change</p>
+  © 2025 DSAWebLectures — Subject to change
 </footer>
 
-
-
-  {% block scripts %}{% endblock %}
-
-</body>
+{% block scripts %}{% endblock %}
 
 <script>
-  // Hamburger toggle
-  const toggle = document.querySelector('.nav-toggle');
-  const nav = document.querySelector('.nav-links');
+/* =====================
+   MODAL LOGIC
+===================== */
+function openModal(type) {
+  document.querySelector('.page-wrapper').classList.add('blur');
+  document.getElementById('modal-overlay').classList.remove('hidden');
 
-  toggle.addEventListener('click', () => {
-    nav.classList.toggle('show');
-  });
+  if (type === 'login') {
+    document.getElementById('login-modal').classList.remove('hidden');
+  } else {
+    document.getElementById('register-modal').classList.remove('hidden');
+  }
+}
+
+function closeModal() {
+  document.querySelector('.page-wrapper').classList.remove('blur');
+  document.getElementById('modal-overlay').classList.add('hidden');
+  document.getElementById('login-modal').classList.add('hidden');
+  document.getElementById('register-modal').classList.add('hidden');
+}
+
+function switchModal(type) {
+  document.getElementById('login-modal').classList.add('hidden');
+  document.getElementById('register-modal').classList.add('hidden');
+  openModal(type);
+}
+
+document.getElementById('modal-overlay').addEventListener('click', closeModal);
+
 
 // GRID BACKGROUND EFFECT
 document.addEventListener("DOMContentLoaded", () => {
@@ -202,20 +365,13 @@ document.addEventListener("DOMContentLoaded", () => {
     ({ cols, rows, cells } = createGrid());
   });
 });
+const toggle = document.querySelector('.nav-toggle');
+const nav = document.querySelector('.nav-links');
 
-document.getElementById("bst-max").onclick = async () => {
-  const res = await fetch("/bst/max");
-  const data = await res.json();
-  document.getElementById("bst-info").innerText =
-    "Max Value: " + data.max;
-};
-
-document.getElementById("bst-height").onclick = async () => {
-  const res = await fetch("/bst/height");
-  const data = await res.json();
-  document.getElementById("bst-info").innerText =
-    "Tree Height: " + data.height;
-};
-
+toggle.addEventListener('click', () => {
+  nav.classList.toggle('show');
+});
 </script>
+
+</body>
 </html>

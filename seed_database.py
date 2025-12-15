@@ -38,37 +38,304 @@ def create_posts(admin_id, db_path='feed.db'):
         {
             'title': 'Queue',
             'caption': """
-A Queue is a linear data structure that follows the First In First Out (FIFO) principle. This means the first element added to the queue will be the first one to be removed.
+# Queue Data Structure Using Nodes in Python
 
-### Key Operations:
-- **Enqueue**: Adds an element to the rear of the queue
-- **Dequeue**: Removes an element from the front of the queue
-- **Front/Peek**: Returns the front element without removing it
-- **isEmpty**: Checks if the queue is empty
+## Introduction to Queue
 
-### Time Complexity:
-- Enqueue: O(1)
-- Dequeue: O(1)
-- Search: O(n)
+A **Queue** is a **linear data structure** that follows the principle:
 
-### Circulr Queue:
-A normal Queue is a Linear Queue
-- A Circular Queue is a variation of the queue where the last node points back to the first node instead of pointing to None.
-- This structure avoids unused space and allows continuous reuse of memory.
+**FIFO – First In, First Out**
 
-### Real-world Applications:
-1. CPU scheduling
-2. Disk scheduling
-3. Call center phone systems
-4. Print spooling
+The first element added to the queue is the first element removed.
 
-### Example (Python):
+Queues are commonly used in:
+
+* People lining up for services
+* Printer job scheduling
+* CPU task scheduling
+
+---
+
+## Basic Queue Operations
+
+A queue supports the following operations:
+
+* **Enqueue**: Insert an element at the rear of the queue
+* **Dequeue**: Remove an element from the front of the queue
+* **Peek / Front**: View the front element without removing it
+* **isEmpty**: Check whether the queue is empty
+
+---
+
+## Why Implement Queue Using Nodes
+
+In this lesson:
+
+* Python lists are not used
+* `collections.deque` is not used
+* All behavior is implemented manually
+
+Using nodes helps in understanding how queues work at a low level and how memory is linked together dynamically.
+
+---
+
+## Node Structure
+
+A node is the basic unit of a queue.
+
+Each node contains:
+
+* Data
+* A reference to the next node
+
 ```python
-from collections import deque
-queue = deque()
-queue.append('A')  # Enqueue
-queue.append('B')
-first = queue.popleft()  # Dequeue
+class Node:
+    def __init__(self, data):
+        self.data = data
+        self.next = None
+```
+
+---
+
+## Queue Using Linked Nodes
+
+A queue implemented with nodes maintains two references:
+
+* `front` points to the first element
+* `rear` points to the last element
+
+```python
+class Queue:
+    def __init__(self):
+        self.front = None
+        self.rear = None
+```
+
+---
+
+## Enqueue Operation
+
+The enqueue operation inserts an element at the rear of the queue.
+
+Process:
+
+* Create a new node
+* If the queue is empty, set both front and rear to the new node
+* Otherwise, attach the new node after rear and move rear
+
+```python
+    def enqueue(self, data):
+        new_node = Node(data)
+
+        if self.rear is None:
+            self.front = self.rear = new_node
+            return
+
+        self.rear.next = new_node
+        self.rear = new_node
+```
+
+---
+
+## Dequeue Operation
+
+The dequeue operation removes the front element.
+
+Process:
+
+* If the queue is empty, no deletion is possible
+* Move front to the next node
+* If the queue becomes empty, set rear to None
+
+```python
+    def dequeue(self):
+        if self.front is None:
+            print("Queue is empty")
+            return None
+
+        temp = self.front
+        self.front = self.front.next
+
+        if self.front is None:
+            self.rear = None
+
+        return temp.data
+```
+
+---
+
+## Peek Operation
+
+The peek operation returns the front element without removing it.
+
+```python
+    def peek(self):
+        if self.front is None:
+            return None
+        return self.front.data
+```
+
+---
+
+## Displaying Queue Elements
+
+```python
+    def display(self):
+        current = self.front
+        while current:
+            print(current.data, end=" -> ")
+            current = current.next
+        print("None")
+```
+
+---
+
+## Example Usage of Queue
+
+```python
+q = Queue()
+
+q.enqueue(10)
+q.enqueue(20)
+q.enqueue(30)
+
+q.display()
+
+print(q.dequeue())
+print(q.peek())
+
+q.display()
+```
+
+---
+
+# Circular Queue Using Nodes
+
+## Circular Queue Concept
+
+A **Circular Queue** is a variation of the queue where the last node points back to the first node instead of pointing to None.
+
+This structure avoids unused space and allows continuous reuse of memory.
+
+---
+
+## Circular Queue Properties
+
+* Front points to the first node
+* Rear points to the last node
+* Rear always links back to front
+
+---
+
+## Circular Queue Implementation
+
+The same Node class is reused.
+
+```python
+class CircularQueue:
+    def __init__(self):
+        self.front = None
+        self.rear = None
+```
+
+---
+
+## Enqueue in Circular Queue
+
+Process:
+
+* Create a new node
+* If empty, set front and rear to the node and link rear to front
+* Otherwise, attach the node at rear and update the circular link
+
+```python
+    def enqueue(self, data):
+        new_node = Node(data)
+
+        if self.front is None:
+            self.front = self.rear = new_node
+            self.rear.next = self.front
+            return
+
+        self.rear.next = new_node
+        self.rear = new_node
+        self.rear.next = self.front
+```
+
+---
+
+## Dequeue in Circular Queue
+
+Process:
+
+* If empty, deletion is not possible
+* If only one node exists, reset front and rear
+* Otherwise, move front and update rear link
+
+```python
+    def dequeue(self):
+        if self.front is None:
+            print("Circular Queue is empty")
+            return None
+
+        if self.front == self.rear:
+            data = self.front.data
+            self.front = self.rear = None
+            return data
+
+        data = self.front.data
+        self.front = self.front.next
+        self.rear.next = self.front
+        return data
+```
+
+---
+
+## Display Circular Queue
+
+```python
+    def display(self):
+        if self.front is None:
+            print("Empty")
+            return
+
+        current = self.front
+        while True:
+            print(current.data, end=" -> ")
+            current = current.next
+            if current == self.front:
+                break
+        print("(back to front)")
+```
+
+---
+
+## Example Usage of Circular Queue
+
+```python
+cq = CircularQueue()
+
+cq.enqueue(1)
+cq.enqueue(2)
+cq.enqueue(3)
+
+cq.display()
+
+print(cq.dequeue())
+
+cq.display()
+```
+
+---
+
+## Summary
+
+* A queue follows the FIFO principle
+* Nodes are used instead of built-in structures
+* Front and rear pointers manage insertion and deletion
+* A circular queue connects the rear back to the front
+* Circular queues improve memory utilization
+
 ```
             """,
             'post_type': 'educational'
@@ -76,33 +343,205 @@ first = queue.popleft()  # Dequeue
         {
             'title': 'Stack',
             'caption': """
-A Stack is a linear data structure that follows the Last In First Out (LIFO) principle. The last element added to the stack will be the first one to be removed.
+# Stack Data Structure Using Nodes in Python
 
-### Key Operations:
-- **Push**: Adds an element to the top of the stack
-- **Pop**: Removes the top element from the stack
-- **Peek/Top**: Returns the top element without removing it
-- **isEmpty**: Checks if the stack is empty
+## Introduction to Stack
 
-### Time Complexity:
-- Push: O(1)
-- Pop: O(1)
-- Peek: O(1)
-- Search: O(n)
+A **Stack** is a **linear data structure** that follows the principle:
 
-### Real-world Applications:
-1. Function call stack
-2. Expression evaluation
-3. Undo mechanisms in text editors
-4. Backtracking algorithms
+**LIFO – Last In, First Out**
 
-### Example (Python):
+The last element added to the stack is the first element removed.
+
+Stacks are commonly used in:
+
+* Undo and redo operations
+* Function call management (call stack)
+* Expression evaluation
+* Backtracking algorithms
+
+---
+
+## Basic Stack Operations
+
+A stack supports the following operations:
+
+* **Push**: Insert an element at the top of the stack
+* **Pop**: Remove the top element of the stack
+* **Peek / Top**: View the top element without removing it
+* **isEmpty**: Check whether the stack is empty
+
+---
+
+## Why Implement Stack Using Nodes
+
+In this lesson:
+
+* Python lists are not used
+* No built-in stack utilities are used
+* The stack is built manually using nodes
+
+Using nodes helps visualize how memory is linked dynamically and how stacks work internally.
+
+---
+
+## Node Structure
+
+A node is the basic unit of the stack.
+
+Each node contains:
+
+* Data
+* A reference to the next node
+
 ```python
-stack = []
-stack.append('A')  # Push
-stack.append('B')
-top = stack.pop()  # Pop
+class Node:
+    def __init__(self, data):
+        self.data = data
+        self.next = None
 ```
+
+---
+
+## Stack Using Linked Nodes
+
+A stack implemented with nodes maintains only one reference:
+
+* `top` points to the top element of the stack
+
+```python
+class Stack:
+    def __init__(self):
+        self.top = None
+```
+
+---
+
+## Push Operation
+
+The push operation inserts an element at the top of the stack.
+
+Process:
+
+* Create a new node
+* Make the new node point to the current top
+* Update top to the new node
+
+```python
+    def push(self, data):
+        new_node = Node(data)
+        new_node.next = self.top
+        self.top = new_node
+```
+
+---
+
+## Pop Operation
+
+The pop operation removes the top element of the stack.
+
+Process:
+
+* If the stack is empty, no deletion is possible
+* Store the top node
+* Move top to the next node
+
+```python
+    def pop(self):
+        if self.top is None:
+            print("Stack is empty")
+            return None
+
+        temp = self.top
+        self.top = self.top.next
+        return temp.data
+```
+
+---
+
+## Peek Operation
+
+The peek operation returns the top element without removing it.
+
+```python
+    def peek(self):
+        if self.top is None:
+            return None
+        return self.top.data
+```
+
+---
+
+## Displaying Stack Elements
+
+```python
+    def display(self):
+        current = self.top
+        while current:
+            print(current.data)
+            current = current.next
+```
+
+---
+
+## Example Usage of Stack
+
+```python
+s = Stack()
+
+s.push(10)
+s.push(20)
+s.push(30)
+
+s.display()
+
+print(s.pop())
+print(s.peek())
+
+s.display()
+```
+
+---
+
+## Stack Behavior Visualization
+
+When pushing elements:
+
+Top
+30
+20
+10
+
+When popping:
+
+Top
+20
+10
+
+---
+
+## Advantages of Stack Using Nodes
+
+* Dynamic size
+* No wasted memory
+* Efficient insertion and deletion
+
+---
+
+## Disadvantages of Stack Using Nodes
+
+* Extra memory for pointers
+* No direct access to middle elements
+
+---
+
+## Summary
+
+* Stack follows the LIFO principle
+* Implemented manually using linked nodes
+* Push and pop operations occur at the top
+* No built-in Python data structures were used
+
             """,
             'post_type': 'educational'
         },

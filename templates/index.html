@@ -2,48 +2,6 @@
 {% block title %}DSAWebLectures{% endblock %}
 
 {% block styles %}
-<style>
-  #bg-grid {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    display: grid;
-    transform: translate(-50%, -50%);
-    z-index: -10;
-    pointer-events: none;
-  }
-
-  .grid-cell {
-    width: 60px;
-    height: 60px;
-    background: #0a1a3a;
-    transition: background 0.12s linear, box-shadow 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
-    box-sizing: border-box;
-    border: 2px solid rgba(255,255,255,0.06);
-    opacity: 1;
-  }
-
-  .grid-cell:hover {
-    border-color: rgba(255,255,255,0.12);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
-    transform: translateY(-2px);
-  }
-
-  .grid-cell.active {
-    background: #1e90ff;
-    border-color: rgba(30,144,255,0.9);
-    box-shadow: 0 0 14px rgba(30,144,255,0.35), inset 0 0 6px rgba(255,255,255,0.04);
-  }
-
-  @keyframes cellPulse {
-    0% { background: #1e90ff; }
-    100% { background: #0a1a3a; }
-  }
-
-  .grid-cell.pulse {
-    animation: cellPulse 0.4s forwards;
-  }
-</style>
 {% endblock styles %}
 {% block content %}
 <div id="bg-grid"></div>
@@ -171,58 +129,6 @@ searchBar.addEventListener("keydown", e => {
   if (e.key === "Enter") performSearch();
 });
 sendBtn.addEventListener("click", performSearch);
-
-/* =========================
-   GRID BACKGROUND EFFECT
-========================= */
-document.addEventListener("DOMContentLoaded", () => {
-  const grid = document.getElementById("bg-grid");
-  const cellSize = 30;
-
-  function createGrid() {
-    grid.innerHTML = "";
-    const cols = Math.ceil(window.innerWidth / cellSize) + 2;
-    const rows = Math.ceil(window.innerHeight / cellSize) + 2;
-
-    grid.style.gridTemplateColumns = `repeat(${cols}, ${cellSize}px)`;
-    grid.style.width = `${cols * cellSize}px`;
-    grid.style.height = `${rows * cellSize}px`;
-
-    for (let i = 0; i < cols * rows; i++) {
-      const cell = document.createElement("div");
-      cell.className = "grid-cell";
-      grid.appendChild(cell);
-    }
-
-    return { cols, rows, cells: [...grid.children] };
-  }
-
-  let { cols, rows, cells } = createGrid();
-
-  function pulse(col, row) {
-    if (col < 0 || row < 0 || col >= cols || row >= rows) return;
-    const cell = cells[row * cols + col];
-    if (!cell) return;
-
-    cell.classList.add("active", "pulse");
-    setTimeout(() => cell.classList.remove("active"), 120);
-    setTimeout(() => cell.classList.remove("pulse"), 400);
-  }
-
-  window.addEventListener("mousemove", e => {
-    const rect = grid.getBoundingClientRect();
-    const col = Math.floor((e.clientX - rect.left) / cellSize);
-    const row = Math.floor((e.clientY - rect.top) / cellSize);
-
-    for (let dx = -1; dx <= 1; dx++)
-      for (let dy = -1; dy <= 1; dy++)
-        pulse(col + dx, row + dy);
-  });
-
-  window.addEventListener("resize", () => {
-    ({ cols, rows, cells } = createGrid());
-  });
-});
 </script>
 
 {% endblock scripts %}
