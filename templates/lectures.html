@@ -82,9 +82,9 @@
     </div>
 
     <div style="margin:10px 0;">
-      <button id="bubble-sort-start">Start Bubble Sort</button>
-      <button id="bubble-sort-reset">Reset</button>
-      <button id="bubble-sort-step">Step</button>
+      <button onclick="startSort('bubble')">Start Bubble Sort</button>
+      <button onclick="resetSort('bubble')">Reset</button>
+      <button onclick="stepSort('bubble')">Step</button>
     </div>
 
     <div id="bubble-sort-display" style="padding:10px;border:1px solid #ccc;height:200px;position:relative;overflow:hidden;">
@@ -116,9 +116,9 @@
     </div>
 
     <div style="margin:10px 0;">
-      <button id="merge-sort-start">Start Merge Sort</button>
-      <button id="merge-sort-reset">Reset</button>
-      <button id="merge-sort-step">Step</button>
+      <button onclick="startSort('merge')">Start Merge Sort</button>
+      <button onclick="resetSort('merge')">Reset</button>
+      <button onclick="stepSort('merge')">Step</button>
     </div>
 
     <div id="merge-sort-display" style="padding:10px;border:1px solid #ccc;height:200px;position:relative;overflow:hidden;">
@@ -148,9 +148,9 @@
     </div>
 
     <div style="margin:10px 0;">
-      <button id="selection-sort-start">Start Selection Sort</button>
-      <button id="selection-sort-reset">Reset</button>
-      <button id="selection-sort-step">Step</button>
+      <button onclick="startSort('selection')">Start Selection Sort</button>
+      <button onclick="resetSort('selection')">Reset</button>
+      <button onclick="stepSort('selection')">Step</button>
     </div>
 
     <div id="selection-sort-display" style="padding:10px;border:1px solid #ccc;height:200px;position:relative;overflow:hidden;">
@@ -181,9 +181,9 @@
     </div>
 
     <div style="margin:10px 0;">
-      <button id="insertion-sort-start">Start Insertion Sort</button>
-      <button id="insertion-sort-reset">Reset</button>
-      <button id="insertion-sort-step">Step</button>
+      <button onclick="startSort('insertion')">Start Insertion Sort</button>
+      <button onclick="resetSort('insertion')">Reset</button>
+      <button onclick="stepSort('insertion')">Step</button>
     </div>
 
     <div id="insertion-sort-display" style="padding:10px;border:1px solid #ccc;height:200px;position:relative;overflow:hidden;">
@@ -201,6 +201,45 @@
       </ol>
     </div>
   </article>
+
+<!-- QUICK SORT -->
+<article class="post-card">
+  <header>
+    <h3 class="post-title">Quick Sort</h3>
+    <p class="post-caption">
+      A fast divide-and-conquer sorting algorithm that selects a pivot element
+      and partitions the array into elements less than and greater than the pivot.
+    </p>
+  </header>
+
+  <div class="complexity">
+    <strong>Time Complexity:</strong>
+    O(n log n) average, O(n²) worst case<br>
+    <strong>Space Complexity:</strong> O(log n)
+  </div>
+
+  <div style="margin:10px 0;">
+    <button onclick="startSort('quick')">Start Quick Sort</button>
+    <button onclick="resetSort('quick')">Reset</button>
+    <button onclick="stepSort('quick')">Step</button>
+  </div>
+
+  <div id="quick-sort-display"
+       style="padding:10px;border:1px solid #ccc;height:200px;position:relative;overflow:hidden;">
+    <div id="quick-sort-bars"
+         style="display:flex;height:100%;align-items:flex-end;gap:2px;"></div>
+  </div>
+
+  <div class="explanation" style="margin-top:15px;">
+    <h4>How it works:</h4>
+    <ol>
+      <li>Select a pivot element from the array.</li>
+      <li>Partition elements smaller than the pivot to the left.</li>
+      <li>Partition elements greater than the pivot to the right.</li>
+      <li>Recursively apply the process to both partitions.</li>
+    </ol>
+  </div>
+</article>
 
   <!-- QUEUE DEMO -->
   <article class="post-card">
@@ -371,15 +410,54 @@
   <button onclick="cancelDelete()">Cancel</button>
 </div>
 
-<!-- ===================================== -->
-<!-- Sorting Visualization JS             -->
-<!-- ===================================== -->
-<script src="{{ url_for('static', filename='js/sorting-visualization.js') }}"></script>
-
-<!-- ===================================== -->
-<!-- JAVASCRIPT FIXED                      -->
-<!-- ===================================== -->
 <script>
+
+function renderBars(id, arr, highlight = []) {
+  const c = document.getElementById(id);
+  c.innerHTML = '';
+  const max = Math.max(...arr);
+
+  arr.forEach((v, i) => {
+    const b = document.createElement('div');
+    b.style.height = (v / max * 100) + '%';
+    b.style.width = (100 / arr.length) + '%';
+    b.style.background = highlight.includes(i)
+      ? '#e74c3c'
+      : '#3498db';
+    c.appendChild(b);
+  });
+}
+
+
+let timers = {};
+
+async function resetSort(type) {
+  stopSort(type);
+  const r = await fetch(`/sorting/${type}/reset`, { method: 'POST' });
+  const d = await r.json();
+  renderBars(`${type}-sort-bars`, d.array);
+}
+
+async function stepSort(type) {
+  const r = await fetch(`/sorting/${type}/step`, { method: 'POST' });
+  const d = await r.json();
+  if (d.array) {
+    renderBars(`${type}-sort-bars`, d.array, d.highlight || []);
+  }
+  if (d.done) stopSort(type);
+}
+
+function startSort(type) {
+  stopSort(type);
+  timers[type] = setInterval(() => stepSort(type), 200);
+}
+
+function stopSort(type) {
+  if (timers[type]) {
+    clearInterval(timers[type]);
+    timers[type] = null;
+  }
+}
 /* ----------------------------- */
 /* Element refs                 */
 /* ----------------------------- */
@@ -954,20 +1032,19 @@ function cancelDelete() {
     pendingDeleteId = null;
   });
 }
+    window.addEventListener('DOMContentLoaded', async () => {
+  const sorts = ['bubble','merge','selection','insertion','quick'];
+  for (const s of sorts) {
+    try {
+      const r = await fetch(`/sorting/${s}/reset`, { method: 'POST' });
+      const d = await r.json();
+      renderBars(`${s}-sort-bars`, d.array);
+    } catch (e) {
+      console.warn('Sort init failed:', s);
+    }
+  }
+});
 
-document.getElementById("bst-max").onclick = async () => {
-  const res = await fetch("/bst/max");
-  const data = await res.json();
-  document.getElementById("bst-info").innerText =
-    "Max Value: " + data.max;
-};
-
-document.getElementById("bst-height").onclick = async () => {
-  const res = await fetch("/bst/height");
-  const data = await res.json();
-  document.getElementById("bst-info").innerText =
-    "Tree Height: " + data.height;
-};
 </script>
 
 {% endblock %}

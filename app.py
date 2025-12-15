@@ -1,14 +1,27 @@
-from flask import Flask, request, render_template, redirect, url_for, g, jsonify, session
-import sqlite3
+# stdlib
 import os
+import sqlite3
 import threading
-import time
-import uuid
-from markupsafe import escape
-from werkzeug.security import generate_password_hash, check_password_hash
-from functools import wraps
-import markdown, bleach
-from atlas_data import atlas_graph
+
+# flask
+from flask import (
+    Flask, request, render_template,
+    redirect, url_for, g, jsonify, session, Blueprint
+)
+
+# content
+import markdown
+import bleach
+
+from StackQueue import *
+from Graph import *
+from TreeBTBST import *
+from Sorting import *
+from Auth import *
+
+app = Flask(__name__)
+app.secret_key = "visual-sorting"
+DATABASE = os.environ.get("DATABASE_PATH", "feed.db")
 
 ALLOWED_TAGS = [
     "h1","h2","h3","p","strong","em",
@@ -32,559 +45,15 @@ def md_to_safe_html(md_text: str) -> str:
     )
 
 
-app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-DATABASE = os.environ.get("DATABASE_PATH", "feed.db")
+import random
 
-# -------------------------
-# OOP USER AUTHENTICATION
-# -------------------------
-class User:
-    """User model with authentication support."""
+ARRAY_SIZE = 20
+MIN_VALUE = 5
+MAX_VALUE = 95
 
-    def __init__(self, id=None, username=None, email=None, oauth_provider=None, oauth_id=None):
-        self.id = id
-        self.username = username
-        self.email = email
-        self.oauth_provider = oauth_provider
-        self.oauth_id = oauth_id
+def random_array():
+    return [random.randint(MIN_VALUE, MAX_VALUE) for _ in range(ARRAY_SIZE)]
 
-    @staticmethod
-    def create_local(db, username, email, password):
-        """Create a new local user with hashed password."""
-        try:
-            hashed_pwd = generate_password_hash(password)
-            cursor = db.cursor()
-            cursor.execute(
-                "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
-                (username, email, hashed_pwd)
-            )
-            db.commit()
-            return User(id=cursor.lastrowid, username=username, email=email)
-        except sqlite3.IntegrityError:
-            return None  # User already exists
-
-    @staticmethod
-    def create_oauth(db, oauth_provider, oauth_id, username, email):
-        """Create or get OAuth user."""
-        cursor = db.cursor()
-        # Check if OAuth user exists
-        cursor.execute("SELECT id, username, email FROM users WHERE oauth_provider=? AND oauth_id=?",
-                       (oauth_provider, oauth_id))
-        row = cursor.fetchone()
-        if row:
-            return User(id=row[0], username=row[1], email=row[2], oauth_provider=oauth_provider, oauth_id=oauth_id)
-
-        # Create new OAuth user
-        try:
-            cursor.execute(
-                "INSERT INTO users (username, email, oauth_provider, oauth_id) VALUES (?, ?, ?, ?)",
-                (username, email, oauth_provider, oauth_id)
-            )
-            db.commit()
-            return User(id=cursor.lastrowid, username=username, email=email, oauth_provider=oauth_provider,
-                        oauth_id=oauth_id)
-        except sqlite3.IntegrityError:
-            # Username or email conflict; use a unique variant
-            unique_username = f"{oauth_provider}_{uuid.uuid4().hex[:8]}"
-            cursor.execute(
-                "INSERT INTO users (username, email, oauth_provider, oauth_id) VALUES (?, ?, ?, ?)",
-                (unique_username, email, oauth_provider, oauth_id)
-            )
-            db.commit()
-            return User(id=cursor.lastrowid, username=unique_username, email=email, oauth_provider=oauth_provider,
-                        oauth_id=oauth_id)
-
-    @staticmethod
-    def authenticate(db, username, password):
-        """Authenticate user by username and password."""
-        cursor = db.cursor()
-        cursor.execute("SELECT id, username, email, password FROM users WHERE username=?", (username,))
-        row = cursor.fetchone()
-        if row and row[3]:  # Check if password exists
-            if check_password_hash(row[3], password):
-                return User(id=row[0], username=row[1], email=row[2])
-        return None
-
-    @staticmethod
-    def get_by_id(db, user_id):
-        """Fetch user by ID."""
-        cursor = db.cursor()
-        cursor.execute("SELECT id, username, email, oauth_provider, oauth_id FROM users WHERE id=?", (user_id,))
-        row = cursor.fetchone()
-        if row:
-            return User(id=row[0], username=row[1], email=row[2], oauth_provider=row[3], oauth_id=row[4])
-        return None
-
-
-class AuthManager:
-    """Manage user sessions and authentication."""
-
-    @staticmethod
-    def login_user(user):
-        """Store user in session."""
-        session['user_id'] = user.id
-        session['username'] = user.username
-
-    @staticmethod
-    def logout_user():
-        """Clear user session."""
-        session.pop('user_id', None)
-        session.pop('username', None)
-
-    @staticmethod
-    def get_current_user(db):
-        """Get current logged-in user from session."""
-        user_id = session.get('user_id')
-        if user_id:
-            return User.get_by_id(db, user_id)
-        return None
-
-    @staticmethod
-    def is_authenticated():
-        """Check if user is logged in."""
-        return 'user_id' in session
-
-
-def login_required(f):
-    """Decorator to require login."""
-
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not AuthManager.is_authenticated():
-            return redirect(url_for('login_page'))
-        return f(*args, **kwargs)
-
-    return decorated_function
-
-
-def get_current_user_context():
-    """Get current user for template context."""
-    db = get_db()
-    user = AuthManager.get_current_user(db)
-    return user
-
-
-# -------------------------
-# SIMPLE NODE / STRUCTURES
-# -------------------------
-class Node:
-    def __init__(self, data):
-        self.node = data
-        self.left = None
-        self.right = None
-
-
-class Stack:
-    def __init__(self):
-        self.head = None
-        self.length = 0
-
-    def push(self, data):
-        n = Node(data)
-        n.left = self.head
-        self.head = n
-        self.length += 1
-
-    def to_list(self):
-        items = []
-        cur = self.head
-        while cur:
-            items.append(cur.node)
-            cur = cur.left
-        return items
-
-
-class QueueLinked:
-    """Linked-list based queue used only locally in some actions."""
-
-    def __init__(self):
-        self.head = None
-        self.tail = None
-        self.length = 0
-
-    def enqueue(self, data):
-        n = Node(data)
-        if not self.head:
-            self.head = n
-            self.tail = n
-        else:
-            self.tail.right = n
-            self.tail = n
-        self.length += 1
-
-    def dequeue(self):
-        if self.length == 0:
-            return None
-        n = self.head
-        self.head = self.head.right
-        self.length -= 1
-        return n.node
-
-
-class BST:
-    def __init__(self):
-        self.root = None
-
-    def insert(self, data):
-        # data expected as string
-        new = Node(data)
-        if not self.root:
-            self.root = new
-            return
-
-        cur = self.root
-        while True:
-            if data < cur.node:
-                if cur.left:
-                    cur = cur.left
-                else:
-                    cur.left = new
-                    return
-            else:
-                if cur.right:
-                    cur = cur.right
-                else:
-                    cur.right = new
-                    return
-
-    def dfs_search(self, word):
-        if not word:
-            return []
-        results = []
-        w = word.lower()
-
-        def walk(node):
-            if not node:
-                return
-            try:
-                if w in node.node.lower():
-                    results.append(node.node)
-            except Exception:
-                pass
-            walk(node.left)
-            walk(node.right)
-
-        walk(self.root)
-        return results
-
-import heapq
-
-class SimpleGraph:
-    def __init__(self):
-        self.edges = {}  # u -> v -> (minutes, meters)
-
-    def add_edge(self, u, v, minutes, meters):
-        self.edges.setdefault(u, {})[v] = (minutes, meters)
-        self.edges.setdefault(v, {})[u] = (minutes, meters)
-
-    def shortest_path(self, src, dst):
-        import heapq
-
-        pq = [(0, 0, src, [])]  # (time, distance, node, path)
-        seen = set()
-
-        while pq:
-            t, d, u, path = heapq.heappop(pq)
-            if u in seen:
-                continue
-
-            path = path + [u]
-
-            if u == dst:
-                return path, t, d
-
-            seen.add(u)
-
-            for v, (tm, dm) in self.edges.get(u, {}).items():
-                heapq.heappush(pq, (t + tm, d + dm, v, path))
-
-        return [], 0, 0
-
-
-# =========================
-# CREATE GRAPH
-# =========================
-graph = SimpleGraph()
-
-# =========================
-# MRT-3 (North ↔ South)
-# =========================
-graph.add_edge("North Ave", "Quezon Ave", 2, 1800)
-graph.add_edge("Quezon Ave", "GMA Kamuning", 2, 1600)
-graph.add_edge("GMA Kamuning", "Cubao MRT", 2, 1200)
-graph.add_edge("Cubao MRT", "Santolan Annapolis", 2, 1300)
-graph.add_edge("Santolan Annapolis", "Ortigas", 2, 2000)
-graph.add_edge("Ortigas", "Shaw Blvd", 2, 800)
-graph.add_edge("Shaw Blvd", "Boni", 2, 900)
-graph.add_edge("Boni", "Guadalupe", 2, 1000)
-graph.add_edge("Guadalupe", "Buendia MRT", 2, 2200)
-graph.add_edge("Buendia MRT", "Ayala", 2, 900)
-graph.add_edge("Ayala", "Magallanes", 2, 1200)
-graph.add_edge("Magallanes", "Taft Ave MRT", 2, 800)
-
-# =========================
-# LRT-1 (North ↔ South)
-# =========================
-graph.add_edge("Fernando Poe Jr", "Balintawak", 2, 2000)
-graph.add_edge("Balintawak", "Monumento", 2, 1200)
-graph.add_edge("Monumento", "5th Ave", 2, 900)
-graph.add_edge("5th Ave", "R. Papa", 2, 1000)
-graph.add_edge("R. Papa", "Abad Santos", 2, 900)
-graph.add_edge("Abad Santos", "Blumentritt LRT1", 2, 1100)
-graph.add_edge("Blumentritt LRT1", "Tayuman", 2, 700)
-graph.add_edge("Tayuman", "Bambang", 2, 600)
-graph.add_edge("Bambang", "Doroteo Jose", 2, 600)
-graph.add_edge("Doroteo Jose", "Carriedo", 2, 700)
-graph.add_edge("Carriedo", "Central Terminal", 2, 900)
-graph.add_edge("Central Terminal", "UN Ave", 2, 1000)
-graph.add_edge("UN Ave", "Pedro Gil", 2, 800)
-graph.add_edge("Pedro Gil", "Quirino", 2, 800)
-graph.add_edge("Quirino", "Vito Cruz", 2, 900)
-graph.add_edge("Vito Cruz", "Gil Puyat LRT1", 2, 1100)
-graph.add_edge("Gil Puyat LRT1", "Libertad", 2, 800)
-graph.add_edge("Libertad", "EDSA LRT1", 2, 900)
-graph.add_edge("EDSA LRT1", "Baclaran", 2, 700)
-graph.add_edge("Baclaran", "Redemptorist", 2, 900)
-graph.add_edge("Redemptorist", "MIA Road", 2, 1100)
-graph.add_edge("MIA Road", "Asia World", 2, 1200)
-
-# =========================
-# LRT-2 (West ↔ East)
-# =========================
-graph.add_edge("Recto", "Legarda", 2, 1300)
-graph.add_edge("Legarda", "Pureza", 2, 1200)
-graph.add_edge("Pureza", "V. Mapa", 2, 1400)
-graph.add_edge("V. Mapa", "J. Ruiz", 2, 1000)
-graph.add_edge("J. Ruiz", "Gilmore", 2, 900)
-graph.add_edge("Gilmore", "Betty Go-Belmonte", 2, 1000)
-graph.add_edge("Betty Go-Belmonte", "Cubao LRT2", 2, 800)
-graph.add_edge("Cubao LRT2", "Anonas", 2, 900)
-graph.add_edge("Anonas", "Katipunan", 2, 1100)
-graph.add_edge("Katipunan", "Santolan", 2, 1200)
-graph.add_edge("Santolan", "Marikina-Pasig", 3, 2500)
-graph.add_edge("Marikina-Pasig", "Antipolo", 3, 2800)
-
-def build_svg(path=None):
-    path = path or []
-    out = []
-    import math
-    import random
-
-    # Get all unique stations from edges
-    stations = set()
-    for u in graph.edges:
-        stations.add(u)
-        for v in graph.edges[u]:
-            stations.add(v)
-    stations = sorted(stations)
-    n = len(stations)
-
-    if n == 0:
-        return ""
-
-    # =========================
-    # FORCE-DIRECTED LAYOUT
-    # =========================
-    pos = {}
-    width, height = 1200, 800
-    k = math.sqrt((width * height) / n)  # Optimal distance between nodes
-    
-    # Initialize positions randomly
-    for station in stations:
-        pos[station] = {
-            'x': random.uniform(0, width),
-            'y': random.uniform(0, height),
-            'vx': 0,
-            'vy': 0
-        }
-
-    # Simple force-directed layout
-    def repulse():
-        for i, u in enumerate(stations):
-            for v in stations[i+1:]:
-                dx = pos[u]['x'] - pos[v]['x']
-                dy = pos[u]['y'] - pos[v]['y']
-                d = max(0.1, math.sqrt(dx*dx + dy*dy))
-                f = (k * k) / (d * d)
-                fx = f * dx / d
-                fy = f * dy / d
-                pos[u]['vx'] += fx
-                pos[u]['vy'] += fy
-                pos[v]['vx'] -= fx
-                pos[v]['vy'] -= fy
-
-    def attract():
-        for u in graph.edges:
-            for v in graph.edges[u]:
-                dx = pos[v]['x'] - pos[u]['x']
-                dy = pos[v]['y'] - pos[u]['y']
-                d = max(0.1, math.sqrt(dx*dx + dy*dy))
-                f = (d * d) / k
-                fx = f * dx / d
-                fy = f * dy / d
-                pos[u]['vx'] += fx
-                pos[u]['vy'] += fy
-                pos[v]['vx'] -= fx
-                pos[v]['vy'] -= fy
-
-    # Run force-directed layout
-    for _ in range(100):  # Number of iterations
-        repulse()
-        attract()
-        
-        # Update positions
-        for station in stations:
-            # Apply velocity
-            pos[station]['x'] += pos[station]['vx'] * 0.1
-            pos[station]['y'] += pos[station]['vy'] * 0.1
-            # Dampening
-            pos[station]['vx'] *= 0.9
-            pos[station]['vy'] *= 0.9
-            # Boundary conditions
-            pos[station]['x'] = max(50, min(width - 50, pos[station]['x']))
-            pos[station]['y'] = max(50, min(height - 50, pos[station]['y']))
-
-    # =========================
-    # EDGES
-    # =========================
-    out.append('<g id="edges">')
-    for u in graph.edges:
-        x1, y1 = pos[u]['x'], pos[u]['y']
-        for v in graph.edges[u]:
-            x2, y2 = pos[v]['x'], pos[v]['y']
-            # Determine line color based on line type
-            line_class = "line-mrt3" if "MRT" in u or "MRT" in v else "line-lrt1" if "LRT1" in u or "LRT1" in v else "line-lrt2"
-            out.append(
-                f'''
-                <line x1="{x1}" y1="{y1}"
-                      x2="{x2}" y2="{y2}"
-                      class="{line_class}"
-                      stroke-width="4"
-                      stroke-linecap="round"
-                      stroke-opacity="0.7"/>
-                '''
-            )
-    out.append('</g>')
-
-    # =========================
-    # ROUTE HIGHLIGHT
-    # =========================
-    if len(path) > 1:
-        out.append('<g id="route">')
-        for i in range(len(path)-1):
-            a, b = path[i], path[i+1]
-            x1, y1 = pos[a]['x'], pos[a]['y']
-            x2, y2 = pos[b]['x'], pos[b]['y']
-            out.append(
-                f'''
-                <line x1="{x1}" y1="{y1}"
-                      x2="{x2}" y2="{y2}"
-                      stroke="#10b981"
-                      stroke-width="6"
-                      stroke-linecap="round"
-                      stroke-dasharray="8,4"
-                      stroke-linejoin="round"/>
-                '''
-            )
-        out.append('</g>')
-
-    # =========================
-    # NODES
-    # =========================
-    out.append('<g id="nodes">')
-    for name in stations:
-        x, y = pos[name]['x'], pos[name]['y']
-        is_path = name in path
-        cls = "station" + (" locked" if is_path else "")
-        
-        # Add station marker
-        out.append(
-            f'''
-            <g class="node" transform="translate({x}, {y})">
-                <circle cx="0" cy="0" r="8"
-                        class="{cls}"
-                        data-station="{name}"
-                        style="cursor: pointer;"/>
-                <text x="12" y="4"
-                      class="station-label"
-                      data-station="{name}">
-                    {name}
-                </text>
-            </g>
-            '''
-        )
-    out.append('</g>')
-
-    # =========================
-    # FINAL SVG
-    # =========================
-    svg = f'''
-    <svg width="100%" height="100%" viewBox="0 0 {width} {height}"
-         xmlns="http://www.w3.org/2000/svg"
-         style="background: #f8f9fa;"
-         id="rail-map">
-        <defs>
-            <style>
-                .station {{
-                    fill: #6c757d;
-                    stroke: white;
-                    stroke-width: 2;
-                    transition: all 0.2s;
-                }}
-                .station:hover {{
-                    fill: #0d6efd;
-                    transform: scale(1.5);
-                }}
-                .station.locked {{
-                    fill: #10b981;
-                    stroke: white;
-                    stroke-width: 2;
-                    filter: drop-shadow(0 0 4px rgba(16, 185, 129, 0.5));
-                }}
-                .station-label {{
-                    font-size: 12px;
-                    font-weight: 500;
-                    fill: #495057;
-                    text-shadow: 0 0 3px white, 0 0 3px white, 0 0 3px white;
-                    pointer-events: none;
-                    transition: all 0.2s;
-                }}
-                .station.locked + .station-label {{
-                    fill: #10b981;
-                    font-weight: 600;
-                }}
-                .line-mrt3 {{ stroke: #FFD700; }}  /* Gold for MRT-3 */
-                .line-lrt1 {{ stroke: #FF0000; }}  /* Red for LRT-1 */
-                .line-lrt2 {{ stroke: #6F2DA8; }}  /* Purple for LRT-2 */
-            </style>
-        </defs>
-        <g transform="translate(0,0)">
-            {"".join(out)}
-        </g>
-        <g id="controls">
-            <rect x="20" y="20" width="180" height="100" rx="8" fill="white" stroke="#e2e8f0" stroke-width="1"/>
-            <text x="30" y="45" font-size="12" font-weight="600">Line Legend</text>
-            <g transform="translate(30, 65)">
-                <line x1="0" y1="0" x2="20" y2="0" class="line-mrt3" stroke-width="4"/>
-                <text x="30" y="4" font-size="11">MRT-3</text>
-            </g>
-            <g transform="translate(30, 85)">
-                <line x1="0" y1="0" x2="20" y2="0" class="line-lrt1" stroke-width="4"/>
-                <text x="30" y="4" font-size="11">LRT-1</text>
-            </g>
-            <g transform="translate(30, 105)">
-                <line x1="0" y1="0" x2="20" y2="0" class="line-lrt2" stroke-width="4"/>
-                <text x="30" y="4" font-size="11">LRT-2</text>
-            </g>
-        </g>
-    </svg>
-    '''
-    return svg
-
-# -------------------------
-# DATABASE HELPERS
-# -------------------------
 def get_db():
     if "db" not in g:
         dir_name = os.path.dirname(DATABASE)
@@ -597,8 +66,6 @@ def get_db():
         db.execute("PRAGMA foreign_keys=ON;")
         g.db = db
     return g.db
-
-
 
 @app.teardown_appcontext
 def close_db(error=None):
@@ -1261,514 +728,6 @@ def edit(id):
 def collaborators_page():
     return render_template("collaborators.html")
 
-
-# ----------------------
-# In-memory storage
-# ----------------------
-queue = []
-stack = []
-tree_root = None
-tree_roots = []
-bst_root = None
-bt_roots = []
-# Graph in-memory: vertices list and edges weight map
-graph_vertices = []  # list of dicts: {id, label}
-graph_edges = {}  # map (u_id, v_id) -> weight (int)
-# edge weights used for trees/BT as well
-edge_weights = {}
-# pending deletions store: post_id -> threading.Timer
-pending_deletes = {}
-# pending detached subtrees store: token -> (type, node)
-pending_subtrees = {}
-
-
-# ----------------------
-# Tree / BST classes
-# ----------------------
-class TreeNode:
-    def __init__(self, val):
-        self.val = val
-        self.left = None
-        self.right = None
-        # support n-ary children for general Tree demo
-        self.children = []
-        try:
-            self.id = str(uuid.uuid4())
-        except Exception:
-            self.id = None
-
-
-# ----------------------
-# Helpers
-# ----------------------
-def escape_text(text):
-    if text is None:
-        return ""
-    return (str(text)
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&#39;"))
-
-
-# ----------------------
-# SVG renderers
-# ----------------------
-def render_queue_svg():
-    width = max(300, 120 * max(1, len(queue)))
-    height = 120
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
-    for i, val in enumerate(queue):
-        x = 20 + i * 120
-        parts.append(f'<rect x="{x}" y="30" width="100" height="60" rx="8" fill="#4cc9ff" stroke="#fff"/>')
-        parts.append(
-            f'<text x="{x + 50}" y="65" font-size="18" text-anchor="middle" fill="#000">{escape_text(val)}</text>')
-    parts.append('</svg>')
-    return "".join(parts)
-
-
-def render_stack_svg():
-    width = 200
-    height = max(120, 80 * len(stack) + 20)
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
-    for i, val in enumerate(reversed(stack)):
-        y = 20 + i * 80
-        parts.append(f'<rect x="40" y="{y}" width="120" height="60" rx="8" fill="#90f1a9" stroke="#fff"/>')
-        parts.append(
-            f'<text x="100" y="{y + 36}" font-size="18" text-anchor="middle" fill="#000">{escape_text(val)}</text>')
-    parts.append('</svg>')
-    return "".join(parts)
-
-
-def render_generic_tree_svg(root):
-    if not root:
-        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200"></svg>'
-
-    width, height = 1000, 600
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
-
-    def traverse(node, x, y, level, span=200):
-        if not node:
-            return
-        # determine children (support both children list and legacy left/right)
-        childs = []
-        if getattr(node, 'children', None):
-            childs = [c for c in node.children if c]
-        else:
-            if node.left: childs.append(node.left)
-            if node.right: childs.append(node.right)
-
-        n = len(childs)
-        gap = span // max(1, n)
-        start_x = x - (gap * (n - 1)) / 2
-
-        for i, ch in enumerate(childs):
-            cx = int(start_x + i * gap)
-            cy = y + 100
-            # edge weight lookup
-            w = edge_weights.get((getattr(node, 'id', ''), getattr(ch, 'id', '')), 1)
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{cx}" y2="{cy}" stroke="#fff" stroke-width="{1 + (w - 1)}"/>')
-            if w > 1:
-                mx = (x + cx) // 2
-                my = (y + cy) // 2
-                parts.append(f'<text x="{mx}" y="{my}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
-            traverse(ch, cx, cy, level + 1, max(60, span // 2))
-
-        # include data-id and data-val attributes so client-side can bind click handlers
-        parts.append(
-            f'<circle cx="{x}" cy="{y}" r="25" fill="#f8c537" stroke="#fff" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
-        parts.append(
-            f'<text x="{x}" y="{y + 5}" font-size="18" text-anchor="middle" fill="#000">{escape_text(node.val)}</text>')
-
-    traverse(root, width // 2, 60, 1, 400)
-    parts.append('</svg>')
-    return "".join(parts)
-
-
-def render_tree_forest_svg(roots):
-    # render multiple general trees stacked vertically
-    if not roots:
-        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 200" width="1000" height="200"></svg>'
-    width = 1000
-    per_h = 260
-    total_h = per_h * len(roots)
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{total_h}" viewBox="0 0 {width} {total_h}">']
-
-    def traverse(node, x, y, level, span=200):
-        if not node:
-            return
-        childs = []
-        if getattr(node, 'children', None):
-            childs = [c for c in node.children if c]
-        else:
-            if node.left: childs.append(node.left)
-            if node.right: childs.append(node.right)
-
-        n = len(childs)
-        gap = span // max(1, n)
-        start_x = x - (gap * (n - 1)) / 2
-
-        for i, ch in enumerate(childs):
-            cx = int(start_x + i * gap)
-            cy = y + 100
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{cx}" y2="{cy}" stroke="#fff"/>')
-            traverse(ch, cx, cy, level + 1, max(60, span // 2))
-
-        parts.append(
-            f'<circle cx="{x}" cy="{y}" r="25" fill="#f8c537" stroke="#fff" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
-        parts.append(
-            f'<text x="{x}" y="{y + 5}" font-size="20" text-anchor="middle" fill="#000">{escape_text(node.val)}</text>')
-
-    for i, root in enumerate(roots):
-        y0 = 40 + i * per_h
-        traverse(root, width // 2, y0, 1)
-
-    parts.append('</svg>')
-    return ''.join(parts)
-
-
-# ----------------------
-# BST helpers
-# ----------------------
-def bst_insert(node, val):
-    if not node:
-        return TreeNode(val)
-    # prevent duplicate values: if equal, do nothing
-    if val == node.val:
-        return node
-    if val < node.val:
-        node.left = bst_insert(node.left, val)
-    else:
-        node.right = bst_insert(node.right, val)
-    return node
-
-
-# ----------------------
-# MANUAL BINARY TREE
-# ----------------------
-bt_root = None
-
-
-def render_binary_tree_svg(root):
-    if not root:
-        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400"></svg>'
-
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="500" viewBox="0 0 1000 500">']
-
-    def walk(node, x, y, spread):
-        if not node:
-            return
-
-        if node.left:
-            lx = x - spread
-            ly = y + 100
-            w = edge_weights.get((getattr(node, 'id', ''), getattr(node.left, 'id', '')), 1)
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{lx}" y2="{ly}" stroke="white" stroke-width="{1 + (w - 1)}"/>')
-            if w > 1:
-                parts.append(
-                    f'<text x="{(x + lx) // 2}" y="{(y + ly) // 2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
-            walk(node.left, lx, ly, spread // 2)
-
-        if node.right:
-            rx = x + spread
-            ry = y + 100
-            w = edge_weights.get((getattr(node, 'id', ''), getattr(node.right, 'id', '')), 1)
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{rx}" y2="{ry}" stroke="white" stroke-width="{1 + (w - 1)}"/>')
-            if w > 1:
-                parts.append(
-                    f'<text x="{(x + rx) // 2}" y="{(y + ry) // 2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
-            walk(node.right, rx, ry, spread // 2)
-
-        parts.append(
-            f'<circle cx="{x}" cy="{y}" r="25" fill="#ff6b6b" stroke="white" data-id="{node.id}" data-val="{escape_text(node.val)}"/>')
-        parts.append(
-            f'<text x="{x}" y="{y + 6}" text-anchor="middle" font-size="18" fill="black">{escape_text(node.val)}</text>')
-
-    walk(root, 500, 50, 200)
-    parts.append('</svg>')
-    return "".join(parts)
-
-
-def render_bt_forest_svg(roots):
-    # render multiple binary trees stacked vertically
-    if not roots:
-        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 200" width="1000" height="200"></svg>'
-    width = 1000
-    per_h = 300
-    total_h = per_h * len(roots)
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{total_h}" viewBox="0 0 {width} {total_h}">']
-
-    def walk(node, x, y, spread):
-        if not node:
-            return
-        if node.left:
-            lx = x - spread
-            ly = y + 100
-            w = edge_weights.get((getattr(node, 'id', ''), getattr(node.left, 'id', '')), 1)
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{lx}" y2="{ly}" stroke="white" stroke-width="{1 + (w - 1)}"/>')
-            if w > 1:
-                parts.append(
-                    f'<text x="{(x + lx) // 2}" y="{(y + ly) // 2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
-            walk(node.left, lx, ly, spread // 2)
-        if node.right:
-            rx = x + spread
-            ry = y + 100
-            w = edge_weights.get((getattr(node, 'id', ''), getattr(node.right, 'id', '')), 1)
-            parts.append(f'<line x1="{x}" y1="{y}" x2="{rx}" y2="{ry}" stroke="white" stroke-width="{1 + (w - 1)}"/>')
-            if w > 1:
-                parts.append(
-                    f'<text x="{(x + rx) // 2}" y="{(y + ry) // 2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
-            walk(node.right, rx, ry, spread // 2)
-        parts.append(
-            f'<circle cx="{x}" cy="{y}" r="25" fill="#ff6b6b" stroke="white" data-id="{getattr(node, "id", "")}" data-val="{escape_text(node.val)}"/>')
-        parts.append(
-            f'<text x="{x}" y="{y + 6}" text-anchor="middle" font-size="18" fill="black">{escape_text(node.val)}</text>')
-
-    for i, root in enumerate(roots):
-        y0 = 50 + i * per_h
-        walk(root, width // 2, y0, 200)
-
-    parts.append('</svg>')
-    return ''.join(parts)
-
-
-@app.route("/bt/add-left", methods=["POST"])
-def bt_add_left():
-    global bt_root, bt_roots
-    data = request.get_json(silent=True) or {}
-    val = (data.get("value") or request.form.get("value") or "").strip()
-    parent = data.get("parent") or request.form.get("parent")
-    if not val:
-        return jsonify({"ok": False})
-
-    if not bt_roots:
-        node = TreeNode(val)
-        bt_roots.append(node)
-        bt_root = bt_roots[0]
-        return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
-
-    def find_bfs_all(roots, v):
-        for r in roots:
-            q = [r]
-            while q:
-                n = q.pop(0)
-                if not n:
-                    continue
-                try:
-                    if getattr(n, 'id', None) == v or str(n.val) == str(v):
-                        return n
-                except Exception:
-                    pass
-                if n.left: q.append(n.left)
-                if n.right: q.append(n.right)
-        return None
-
-    if parent:
-        p = find_bfs_all(bt_roots, parent)
-        if p:
-            if not p.right:
-                p.right = TreeNode(val)
-            else:
-                q = [p.right]
-                placed = False
-                while q and not placed:
-                    n = q.pop(0)
-                    if not n.left:
-                        n.left = TreeNode(val);
-                        placed = True;
-                        break
-                    if not n.right:
-                        n.right = TreeNode(val);
-                        placed = True;
-                        break
-                    q.extend([n.left, n.right])
-        else:
-            bt_roots.append(TreeNode(val))
-    else:
-        first = bt_roots[0]
-        if not first.left:
-            first.left = TreeNode(val)
-        else:
-            bt_roots.append(TreeNode(val))
-
-    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
-
-
-@app.route("/bt/add-right", methods=["POST"])
-def bt_add_right():
-    global bt_root, bt_roots
-    data = request.get_json(silent=True) or {}
-    val = (data.get("value") or request.form.get("value") or "").strip()
-    parent = data.get("parent") or request.form.get("parent")
-    if not val:
-        return jsonify({"ok": False})
-    if not bt_roots:
-        # create first root
-        node = TreeNode(val)
-        bt_roots.append(node)
-        bt_root = bt_roots[0]
-        return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
-
-    # helper: search across all roots by id or value
-    def find_bfs_all(roots, v):
-        for r in roots:
-            q = [r]
-            while q:
-                n = q.pop(0)
-                if not n:
-                    continue
-                try:
-                    if getattr(n, 'id', None) == v or str(n.val) == str(v):
-                        return n
-                except Exception:
-                    pass
-                if n.left: q.append(n.left)
-                if n.right: q.append(n.right)
-        return None
-
-    if parent:
-        p = find_bfs_all(bt_roots, parent)
-        if p:
-            if not p.left:
-                p.left = TreeNode(val)
-            else:
-                q = [p.left]
-                placed = False
-                while q and not placed:
-                    n = q.pop(0)
-                    if not n.left:
-                        n.left = TreeNode(val);
-                        placed = True;
-                        break
-                    if not n.right:
-                        n.right = TreeNode(val);
-                        placed = True;
-                        break
-                    q.extend([n.left, n.right])
-        else:
-            # parent not found -> create new root
-            bt_roots.append(TreeNode(val))
-    else:
-        # no parent -> attempt to insert under first root's right if empty, else create new root
-        first = bt_roots[0]
-        if not first.right:
-            first.right = TreeNode(val)
-        else:
-            bt_roots.append(TreeNode(val))
-    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
-
-
-@app.route("/bt/reset", methods=["POST"])
-def bt_reset():
-    global bt_root
-    global bt_roots
-    bt_roots.clear()
-    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
-
-
-@app.route("/bt/add-root", methods=["POST"])
-def bt_add_root():
-    global bt_roots
-    data = request.get_json(silent=True) or {}
-    val = (data.get("value") or request.form.get("value") or "").strip()
-    if not val:
-        return jsonify({"ok": False})
-    node = TreeNode(val)
-    bt_roots.append(node)
-    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
-
-
-def bst_search(node, val):
-    if not node:
-        return False
-    if node.val == val:
-        return True
-    elif val < node.val:
-        return bst_search(node.left, val)
-    else:
-        return bst_search(node.right, val)
-
-
-def bst_find_max(node):
-    if not node:
-        return None
-    while node.right:
-        node = node.right
-    return node.val
-
-
-def bst_height(node):
-    if not node:
-        return 0
-    return 1 + max(bst_height(node.left), bst_height(node.right))
-
-
-def bst_delete(node, val):
-    if not node:
-        return None
-
-    if val < node.val:
-        node.left = bst_delete(node.left, val)
-    elif val > node.val:
-        node.right = bst_delete(node.right, val)
-    else:
-        # Case 1: No child
-        if not node.left and not node.right:
-            return None
-
-        # Case 2: One child
-        if not node.left:
-            return node.right
-        if not node.right:
-            return node.left
-
-        # Case 3: Two children
-        temp = bst_find_max(node.left)
-        node.val = temp
-        node.left = bst_delete(node.left, temp)
-
-    return node
-
-
-def bst_detach(node, val):
-    """Detach the node with value `val` from the tree and return (new_tree_root, detached_node).
-    If not found, (node, None) is returned."""
-    if not node:
-        return node, None
-
-    if val < node.val:
-        detached = node
-        return node, detached
-        if not node.left and not node.right:
-            return None, detached
-
-        if not node.left:
-            return node.right, detached
-        if not node.right:
-            return node.left, detached
-
-        # two children: replace with max from left
-        temp_val = bst_find_max(node.left)
-        node.val = temp_val
-        node.left = bst_delete(node.left, temp_val)
-        return node, detached
-
-        # two children: replace with max from left
-        temp_val = bst_find_max(node.left)
-        node.val = temp_val
-        node.left = bst_delete(node.left, temp_val)
-        return node, detached
-
-
-# ----------------------
-# Routes
-# ----------------------
 # Queue endpoints
 @app.route("/queue/enqueue", methods=["POST"])
 def queue_enqueue():
@@ -1923,109 +882,6 @@ def bst_delete_route():
         response["detached_root"] = detached.val
         response["token"] = token
     return jsonify(response)
-
-
-# ----------------------
-# Graph endpoints
-# ----------------------
-@app.route('/graph/svg')
-def graph_svg():
-    return jsonify({"ok": True, "svg": render_graph_svg()})
-
-
-def render_graph_svg():
-    # simple circular layout
-    if not graph_vertices:
-        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" width="800" height="400"></svg>'
-    width = 800
-    height = 400
-    cx = width // 2
-    cy = height // 2
-    r = min(cx, cy) - 80
-    n = len(graph_vertices)
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
-    coords = {}
-    for i, v in enumerate(graph_vertices):
-        angle = 2 * 3.14159 * i / max(1, n)
-        x = int(cx + r * (0.9 * __import__('math').cos(angle)))
-        y = int(cy + r * (0.9 * __import__('math').sin(angle)))
-        coords[v['id']] = (x, y)
-
-    # draw edges
-    for (u, v), w in graph_edges.items():
-        if u not in coords or v not in coords: continue
-        x1, y1 = coords[u]
-        x2, y2 = coords[v]
-        parts.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#fff" stroke-width="{1 + (w - 1)}"/>')
-        if w > 1:
-            parts.append(
-                f'<text x="{(x1 + x2) // 2}" y="{(y1 + y2) // 2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
-
-    # draw vertices
-    for v in graph_vertices:
-        x, y = coords[v['id']]
-        parts.append(
-            f'<circle cx="{x}" cy="{y}" r="20" fill="#7bd389" stroke="#fff" data-id="{v["id"]}" data-val="{escape_text(v.get("label", ""))}"/>')
-        parts.append(
-            f'<text x="{x}" y="{y + 6}" text-anchor="middle" font-size="14" fill="#000">{escape_text(v.get("label", ""))}</text>')
-
-    parts.append('</svg>')
-    return ''.join(parts)
-
-
-@app.route('/graph/add-vertex', methods=['POST'])
-def graph_add_vertex():
-    label = (request.json.get('label') or '').strip()
-    if not label:
-        return jsonify({'ok': False})
-    vid = uuid.uuid4().hex
-    graph_vertices.append({'id': vid, 'label': label})
-    return jsonify({'ok': True, 'svg': render_graph_svg(), 'id': vid})
-
-
-@app.route('/graph/delete-vertex', methods=['POST'])
-def graph_delete_vertex():
-    vid = request.json.get('id')
-    if not vid: return jsonify({'ok': False})
-    global graph_vertices, graph_edges
-    graph_vertices[:] = [v for v in graph_vertices if v['id'] != vid]
-    # remove edges touching vid
-    keys = [k for k in graph_edges.keys()]
-    for k in keys:
-        if vid in k:
-            graph_edges.pop(k, None)
-    return jsonify({'ok': True, 'svg': render_graph_svg()})
-
-
-@app.route('/graph/add-edge', methods=['POST'])
-def graph_add_edge():
-    u = request.json.get('u')
-    v = request.json.get('v')
-    directed = request.json.get('directed', False)
-    if not u or not v: return jsonify({'ok': False})
-    # collapse parallel edges by increasing weight
-    graph_edges[(u, v)] = graph_edges.get((u, v), 0) + 1
-    if not directed:
-        graph_edges[(v, u)] = graph_edges.get((v, u), 0) + 1
-    return jsonify({'ok': True, 'svg': render_graph_svg()})
-
-
-@app.route('/graph/set-weight', methods=['POST'])
-def graph_set_weight():
-    u = request.json.get('u')
-    v = request.json.get('v')
-    w = int(request.json.get('weight') or 1)
-    if not u or not v: return jsonify({'ok': False})
-    graph_edges[(u, v)] = w
-    return jsonify({'ok': True, 'svg': render_graph_svg()})
-
-
-@app.route('/graph/reset', methods=['POST'])
-def graph_reset():
-    graph_vertices.clear()
-    graph_edges.clear()
-    return jsonify({'ok': True, 'svg': render_graph_svg()})
 
 
 @app.route('/tree/delete', methods=['POST'])
@@ -2340,6 +1196,104 @@ def reattach_subtree(token):
 
     return jsonify({'ok': False, 'error': 'unknown_type'}), 400
 
+@app.route('/graph/svg')
+def graph_svg():
+    return jsonify({"ok": True, "svg": render_graph_svg()})
+
+def render_graph_svg():
+    # simple circular layout
+    if not graph_vertices:
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" width="800" height="400"></svg>'
+    width = 800
+    height = 400
+    cx = width // 2
+    cy = height // 2
+    r = min(cx, cy) - 80
+    n = len(graph_vertices)
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
+    coords = {}
+    for i, v in enumerate(graph_vertices):
+        angle = 2 * 3.14159 * i / max(1, n)
+        x = int(cx + r * (0.9 * __import__('math').cos(angle)))
+        y = int(cy + r * (0.9 * __import__('math').sin(angle)))
+        coords[v['id']] = (x, y)
+
+    # draw edges
+    for (u, v), w in graph_edges.items():
+        if u not in coords or v not in coords: continue
+        x1, y1 = coords[u]
+        x2, y2 = coords[v]
+        parts.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#fff" stroke-width="{1 + (w - 1)}"/>')
+        if w > 1:
+            parts.append(
+                f'<text x="{(x1 + x2) // 2}" y="{(y1 + y2) // 2}" font-size="14" text-anchor="middle" fill="#fff">{w}</text>')
+
+    # draw vertices
+    for v in graph_vertices:
+        x, y = coords[v['id']]
+        parts.append(
+            f'<circle cx="{x}" cy="{y}" r="20" fill="#7bd389" stroke="#fff" data-id="{v["id"]}" data-val="{escape_text(v.get("label", ""))}"/>')
+        parts.append(
+            f'<text x="{x}" y="{y + 6}" text-anchor="middle" font-size="14" fill="#000">{escape_text(v.get("label", ""))}</text>')
+
+    parts.append('</svg>')
+    return ''.join(parts)
+
+
+@app.route('/graph/add-vertex', methods=['POST'])
+def graph_add_vertex():
+    label = (request.json.get('label') or '').strip()
+    if not label:
+        return jsonify({'ok': False})
+    vid = uuid.uuid4().hex
+    graph_vertices.append({'id': vid, 'label': label})
+    return jsonify({'ok': True, 'svg': render_graph_svg(), 'id': vid})
+
+
+@app.route('/graph/delete-vertex', methods=['POST'])
+def graph_delete_vertex():
+    vid = request.json.get('id')
+    if not vid: return jsonify({'ok': False})
+    global graph_vertices, graph_edges
+    graph_vertices[:] = [v for v in graph_vertices if v['id'] != vid]
+    # remove edges touching vid
+    keys = [k for k in graph_edges.keys()]
+    for k in keys:
+        if vid in k:
+            graph_edges.pop(k, None)
+    return jsonify({'ok': True, 'svg': render_graph_svg()})
+
+
+@app.route('/graph/add-edge', methods=['POST'])
+def graph_add_edge():
+    u = request.json.get('u')
+    v = request.json.get('v')
+    directed = request.json.get('directed', False)
+    if not u or not v: return jsonify({'ok': False})
+    # collapse parallel edges by increasing weight
+    graph_edges[(u, v)] = graph_edges.get((u, v), 0) + 1
+    if not directed:
+        graph_edges[(v, u)] = graph_edges.get((v, u), 0) + 1
+    return jsonify({'ok': True, 'svg': render_graph_svg()})
+
+
+@app.route('/graph/set-weight', methods=['POST'])
+def graph_set_weight():
+    u = request.json.get('u')
+    v = request.json.get('v')
+    w = int(request.json.get('weight') or 1)
+    if not u or not v: return jsonify({'ok': False})
+    graph_edges[(u, v)] = w
+    return jsonify({'ok': True, 'svg': render_graph_svg()})
+
+
+@app.route('/graph/reset', methods=['POST'])
+def graph_reset():
+    graph_vertices.clear()
+    graph_edges.clear()
+    return jsonify({'ok': True, 'svg': render_graph_svg()})
+
 @app.route("/atlas")
 def atlas():
     return render_template("atlas.html")
@@ -2355,6 +1309,7 @@ def atlas_svg():
 
 @app.route("/atlas/route", methods=["POST"])
 def atlas_route():
+
     data = request.json
     src, dst = data["src"], data["dst"]
     path, total_min, total_m = atlas_graph.shortest_path(src, dst)
@@ -2369,6 +1324,284 @@ def atlas_route():
 def eleccirc():
     """Electrical circuit designer page."""
     return render_template('eleccirc.html')
+
+@app.route("/bt/add-left", methods=["POST"])
+def bt_add_left():
+    global bt_root, bt_roots
+    data = request.get_json(silent=True) or {}
+    val = (data.get("value") or request.form.get("value") or "").strip()
+    parent = data.get("parent") or request.form.get("parent")
+    if not val:
+        return jsonify({"ok": False})
+
+    if not bt_roots:
+        node = TreeNode(val)
+        bt_roots.append(node)
+        bt_root = bt_roots[0]
+        return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
+
+    def find_bfs_all(roots, v):
+        for r in roots:
+            q = [r]
+            while q:
+                n = q.pop(0)
+                if not n:
+                    continue
+                try:
+                    if getattr(n, 'id', None) == v or str(n.val) == str(v):
+                        return n
+                except Exception:
+                    pass
+                if n.left: q.append(n.left)
+                if n.right: q.append(n.right)
+        return None
+
+    if parent:
+        p = find_bfs_all(bt_roots, parent)
+        if p:
+            if not p.right:
+                p.right = TreeNode(val)
+            else:
+                q = [p.right]
+                placed = False
+                while q and not placed:
+                    n = q.pop(0)
+                    if not n.left:
+                        n.left = TreeNode(val);
+                        placed = True;
+                        break
+                    if not n.right:
+                        n.right = TreeNode(val);
+                        placed = True;
+                        break
+                    q.extend([n.left, n.right])
+        else:
+            bt_roots.append(TreeNode(val))
+    else:
+        first = bt_roots[0]
+        if not first.left:
+            first.left = TreeNode(val)
+        else:
+            bt_roots.append(TreeNode(val))
+
+    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
+
+
+@app.route("/bt/add-right", methods=["POST"])
+def bt_add_right():
+    global bt_root, bt_roots
+    data = request.get_json(silent=True) or {}
+    val = (data.get("value") or request.form.get("value") or "").strip()
+    parent = data.get("parent") or request.form.get("parent")
+    if not val:
+        return jsonify({"ok": False})
+    if not bt_roots:
+        # create first root
+        node = TreeNode(val)
+        bt_roots.append(node)
+        bt_root = bt_roots[0]
+        return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
+
+    # helper: search across all roots by id or value
+    def find_bfs_all(roots, v):
+        for r in roots:
+            q = [r]
+            while q:
+                n = q.pop(0)
+                if not n:
+                    continue
+                try:
+                    if getattr(n, 'id', None) == v or str(n.val) == str(v):
+                        return n
+                except Exception:
+                    pass
+                if n.left: q.append(n.left)
+                if n.right: q.append(n.right)
+        return None
+
+    if parent:
+        p = find_bfs_all(bt_roots, parent)
+        if p:
+            if not p.left:
+                p.left = TreeNode(val)
+            else:
+                q = [p.left]
+                placed = False
+                while q and not placed:
+                    n = q.pop(0)
+                    if not n.left:
+                        n.left = TreeNode(val);
+                        placed = True;
+                        break
+                    if not n.right:
+                        n.right = TreeNode(val);
+                        placed = True;
+                        break
+                    q.extend([n.left, n.right])
+        else:
+            # parent not found -> create new root
+            bt_roots.append(TreeNode(val))
+    else:
+        # no parent -> attempt to insert under first root's right if empty, else create new root
+        first = bt_roots[0]
+        if not first.right:
+            first.right = TreeNode(val)
+        else:
+            bt_roots.append(TreeNode(val))
+    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
+
+
+@app.route("/bt/reset", methods=["POST"])
+def bt_reset():
+    global bt_root
+    global bt_roots
+    bt_roots.clear()
+    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
+
+
+@app.route("/bt/add-root", methods=["POST"])
+def bt_add_root():
+    global bt_roots
+    data = request.get_json(silent=True) or {}
+    val = (data.get("value") or request.form.get("value") or "").strip()
+    if not val:
+        return jsonify({"ok": False})
+    node = TreeNode(val)
+    bt_roots.append(node)
+    return jsonify({"ok": True, "svg": render_bt_forest_svg(bt_roots)})
+
+sorting_bp = Blueprint("sorting", __name__)
+
+
+def get_state(name, default):
+    if name not in session:
+        session[name] = default
+    return session[name]
+
+
+# =====================
+# BUBBLE SORT
+# =====================
+@sorting_bp.route("/bubble/reset", methods=["POST"])
+def bubble_reset():
+    session["bubble"] = {
+        "arr": random_array(),
+        "i": 0,
+        "j": 0,
+        "done": False
+    }
+    return jsonify(array=session["bubble"]["arr"], highlight=[])
+
+
+@sorting_bp.route("/bubble/step", methods=["POST"])
+def bubble_step_route():
+    s = get_state("bubble", {
+        "arr": random_array(),
+        "i": 0,
+        "j": 0,
+        "done": False
+    })
+
+    s, highlight, done = bubble_step(s)
+    session["bubble"] = s
+    return jsonify(array=s["arr"], highlight=highlight, done=done)
+
+
+# =====================
+# MERGE SORT
+# =====================
+@sorting_bp.route("/merge/reset", methods=["POST"])
+def merge_reset():
+    arr = random_array()
+    session["merge"] = {
+        "steps": [(arr.copy(), [])] + merge_sort_steps(arr),
+        "idx": 0
+    }
+    return jsonify(array=arr, highlight=[])
+
+@sorting_bp.route("/merge/step", methods=["POST"])
+def merge_step():
+    s = get_state("merge", {"steps": [], "idx": 0})
+
+    if s["idx"] >= len(s["steps"]):
+        return jsonify(done=True)
+
+    arr, highlight = s["steps"][s["idx"]]
+    s["idx"] += 1
+    session["merge"] = s
+
+    return jsonify(array=arr, highlight=highlight, done=False)
+
+
+# =====================
+# QUICK SORT
+# =====================
+@sorting_bp.route("/quick/reset", methods=["POST"])
+def quick_reset():
+    arr = random_array()
+    session["quick"] = {
+        "steps": [(arr.copy(), [])] + quick_sort_steps(arr),
+        "idx": 0
+    }
+    return jsonify(array=arr, highlight=[])
+
+@sorting_bp.route("/quick/step", methods=["POST"])
+def quick_step():
+    s = get_state("quick", {"steps": [], "idx": 0})
+
+    if s["idx"] >= len(s["steps"]):
+        return jsonify(done=True)
+
+    arr, highlight = s["steps"][s["idx"]]
+    s["idx"] += 1
+    session["quick"] = s
+    return jsonify(array=arr, highlight=highlight, done=False)
+
+@sorting_bp.route("/insertion/reset", methods=["POST"])
+def insertion_reset():
+    arr = random_array()
+    session["insertion"] = {
+        "steps": insertion_sort_steps(arr),
+        "idx": 0
+    }
+    return jsonify(array=arr, highlight=[])
+
+
+@sorting_bp.route("/insertion/step", methods=["POST"])
+def insertion_step():
+    s = get_state("insertion", {"steps": [], "idx": 0})
+
+    if s["idx"] >= len(s["steps"]):
+        return jsonify(done=True)
+
+    arr, highlight = s["steps"][s["idx"]]
+    s["idx"] += 1
+    session["insertion"] = s
+    return jsonify(array=arr, highlight=highlight, done=False)
+
+@sorting_bp.route("/selection/reset", methods=["POST"])
+def selection_reset():
+    arr = random_array()
+    session["selection"] = {
+        "steps": selection_sort_steps(arr),
+        "idx": 0
+    }
+    return jsonify(array=arr, highlight=[])
+
+
+@sorting_bp.route("/selection/step", methods=["POST"])
+def selection_step():
+    s = get_state("selection", {"steps": [], "idx": 0})
+
+    if s["idx"] >= len(s["steps"]):
+        return jsonify(done=True)
+
+    arr, highlight = s["steps"][s["idx"]]
+    s["idx"] += 1
+    session["selection"] = s
+    return jsonify(array=arr, highlight=highlight, done=False)
+
+app.register_blueprint(sorting_bp, url_prefix="/sorting")
 
 # RUN
 if __name__ == "__main__":
