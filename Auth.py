@@ -2,7 +2,7 @@
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from flask import session, redirect, url_for
-from app import get_db
+from db import get_db
 import  sqlite3, uuid
 
 class User:

@@ -18,6 +18,7 @@ from Graph import *
 from TreeBTBST import *
 from Sorting import *
 from Auth import *
+from db import get_db
 
 app = Flask(__name__)
 app.secret_key = "visual-sorting"
@@ -53,19 +54,6 @@ MAX_VALUE = 95
 
 def random_array():
     return [random.randint(MIN_VALUE, MAX_VALUE) for _ in range(ARRAY_SIZE)]
-
-def get_db():
-    if "db" not in g:
-        dir_name = os.path.dirname(DATABASE)
-        if dir_name:  # only create folder if a directory exists
-            os.makedirs(dir_name, exist_ok=True)
-        db = sqlite3.connect(DATABASE, timeout=30, check_same_thread=False)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA journal_mode=WAL;")
-        db.execute("PRAGMA synchronous=NORMAL;")
-        db.execute("PRAGMA foreign_keys=ON;")
-        g.db = db
-    return g.db
 
 @app.teardown_appcontext
 def close_db(error=None):
