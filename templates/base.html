@@ -190,6 +190,15 @@ body {
   .nav-links a {
     font-size: 1.1rem;
   }
+
+  @media (max-width: 768px) {
+  .nav-dropdown .dropdown-menu {
+    position: static;
+    border: none;
+    background: transparent;
+  }
+}
+
 }
 
 </style>
@@ -253,8 +262,17 @@ body {
       <a href="{{ url_for('home') }}">Home</a>
       <a href="{{ url_for('lectures') }}">Lectures</a>
       <a href="{{ url_for('collaborators_page') }}">Collaborators</a>
-      <a href="{{ url_for('atlas') }}">Atlas</a>
-      <a href="{{ url_for('eleccirc') }}">Electrical Circuits</a>
+<div class="nav-dropdown nav-link">
+  <button class="dropdown-toggle" id="simToggle">
+    Graph Sims ▾
+  </button>
+
+  <div class="dropdown-menu">
+    <a href="{{ url_for('atlas') }}">Atlas</a>
+    <a href="{{ url_for('eleccirc') }}">Block Diagram</a>
+  </div>
+</div>
+
     </nav>
 
     <div class="nav-auth">
@@ -371,6 +389,18 @@ const nav = document.querySelector('.nav-links');
 toggle.addEventListener('click', () => {
   nav.classList.toggle('show');
 });
+const simToggle = document.getElementById('simToggle');
+const simDropdown = simToggle.parentElement;
+
+simToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  simDropdown.classList.toggle('open');
+});
+
+document.addEventListener('click', () => {
+  simDropdown.classList.remove('open');
+});
+
 </script>
 
 </body>

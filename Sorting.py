@@ -9,9 +9,7 @@ def random_array():
     return [random.randint(MIN_VALUE, MAX_VALUE) for _ in range(ARRAY_SIZE)]
 
 
-# =====================
 # BUBBLE SORT
-# =====================
 def bubble_step(state):
     a = state["arr"]
     i, j = state["i"], state["j"]
@@ -35,9 +33,7 @@ def bubble_step(state):
     return state, highlight, state["done"]
 
 
-# =====================
 # MERGE SORT (steps)
-# =====================
 def merge_sort_steps(arr):
     steps = []
 
@@ -83,9 +79,7 @@ def merge_sort_steps(arr):
     return steps
 
 
-# =====================
 # QUICK SORT (steps)
-# =====================
 def quick_sort_steps(arr):
     steps = []
 
@@ -111,9 +105,7 @@ def quick_sort_steps(arr):
     quicksort(arr, 0, len(arr) - 1)
     return steps
 
-# =====================
-# INSERTION SORT (steps)
-# =====================
+
 def insertion_sort_steps(arr):
     steps = []
     a = arr.copy()
@@ -133,9 +125,7 @@ def insertion_sort_steps(arr):
     return steps
 
 
-# =====================
 # SELECTION SORT (steps)
-# =====================
 def selection_sort_steps(arr):
     steps = []
     a = arr.copy()

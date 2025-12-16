@@ -25,7 +25,7 @@ class Stack:
         return items
 
 
-class QueueLinked:
+class Queue:
     """Linked-list based queue used only locally in some actions."""
 
     def __init__(self):
